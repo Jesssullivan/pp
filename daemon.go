@@ -47,7 +47,15 @@ func newDaemon(cfg *config.Config, logger *slog.Logger) (*daemon, error) {
 
 	// Register Claude collector.
 	claudeAccounts := configToClaudeAccounts(cfg.Accounts.Claude)
-	claudeCollector := claude.NewClaudeCollector(claudeAccounts, logger)
+
+	// Parse account stagger delay
+	staggerDelay, err := time.ParseDuration(cfg.Daemon.AccountStaggerDelay)
+	if err != nil {
+		logger.Warn("invalid account_stagger_delay, using default 5s", "value", cfg.Daemon.AccountStaggerDelay, "error", err)
+		staggerDelay = 5 * time.Second
+	}
+
+	claudeCollector := claude.NewClaudeCollector(claudeAccounts, logger, staggerDelay)
 	registry.Register(claudeCollector)
 
 	// Register billing collector.

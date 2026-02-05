@@ -43,6 +43,54 @@ type LayoutConfig struct {
 	ColorEnabled bool
 }
 
+// LayoutMode represents the responsive layout breakpoint.
+type LayoutMode int
+
+const (
+	// LayoutCompact is for terminals < 120 columns (single column, small waifu above).
+	LayoutCompact LayoutMode = iota
+	// LayoutStandard is for terminals 120-159 columns (two columns, medium waifu left).
+	LayoutStandard
+	// LayoutWide is for terminals 160-199 columns (three columns, medium waifu).
+	LayoutWide
+	// LayoutUltraWide is for terminals 200+ columns (three columns, large waifu).
+	LayoutUltraWide
+)
+
+// WaifuSize holds dimensions for waifu image rendering.
+type WaifuSize struct {
+	Cols int
+	Rows int
+}
+
+// DetermineLayoutMode selects the appropriate layout mode based on terminal width.
+func DetermineLayoutMode(termWidth int) LayoutMode {
+	switch {
+	case termWidth < 120:
+		return LayoutCompact
+	case termWidth < 160:
+		return LayoutStandard
+	case termWidth < 200:
+		return LayoutWide
+	default:
+		return LayoutUltraWide
+	}
+}
+
+// GetWaifuSize returns the appropriate waifu dimensions for the layout mode.
+func GetWaifuSize(mode LayoutMode) WaifuSize {
+	switch mode {
+	case LayoutCompact:
+		return WaifuSize{Cols: 16, Rows: 8} // Small
+	case LayoutStandard, LayoutWide:
+		return WaifuSize{Cols: 22, Rows: 11} // Medium
+	case LayoutUltraWide:
+		return WaifuSize{Cols: 32, Rows: 16} // Large
+	default:
+		return WaifuSize{Cols: 22, Rows: 11} // Default to medium
+	}
+}
+
 // DefaultLayoutConfig returns sensible defaults targeting 80x24.
 func DefaultLayoutConfig() LayoutConfig {
 	return LayoutConfig{

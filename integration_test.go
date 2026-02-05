@@ -118,6 +118,8 @@ func testBillingData(spend float64) *collectors.BillingData {
 			CurrentMonthUSD: spend,
 			ForecastUSD:     &forecast,
 			BudgetUSD:       &budget,
+			SuccessCount:    2, // Both providers are ok
+			TotalConfigured: 2,
 		},
 	}
 }

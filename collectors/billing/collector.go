@@ -295,12 +295,17 @@ func calculateSummary(providers []collectors.ProviderBilling) collectors.Billing
 	var hasForecast, hasBudget bool
 	var forecastTotal, budgetTotal float64
 
+	// Track provider status counts
+	summary.TotalConfigured = len(providers)
+
 	for _, p := range providers {
-		// Only include successful providers in spend totals.
+		// Count successes and errors
 		if p.Status == "error" {
+			summary.ErrorCount++
 			continue
 		}
 
+		summary.SuccessCount++
 		summary.CurrentMonthUSD += p.CurrentMonth.SpendUSD
 
 		if p.CurrentMonth.ForecastUSD != nil {

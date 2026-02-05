@@ -164,6 +164,8 @@ func TestOutput_Billing_WithForecast(t *testing.T) {
 		Total: collectors.BillingSummary{
 			CurrentMonthUSD: 95,
 			ForecastUSD:     &forecast,
+			SuccessCount:    2, // Need at least 1 successful provider for normal output
+			TotalConfigured: 2,
 		},
 	}
 	if err := cache.SetTyped(store, CacheKeyBilling, data); err != nil {
@@ -176,7 +178,7 @@ func TestOutput_Billing_WithForecast(t *testing.T) {
 		t.Fatalf("Module(billing): %v", err)
 	}
 
-	want := "$95 ($200 forecast)"
+	want := "$95 ~$200" // Updated format: sparkline removed in tests, uses tilde for forecast
 	if result != want {
 		t.Errorf("Module(billing) = %q, want %q", result, want)
 	}

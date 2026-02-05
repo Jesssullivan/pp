@@ -119,9 +119,13 @@ func (b *Banner) Generate(ctx context.Context) (string, error) {
 	evaluator := status.NewEvaluator(status.DefaultEvaluatorConfig())
 	systemStatus := evaluator.Evaluate(claude, billing, infra)
 
-	// Step 3-4: Optionally fetch waifu image.
+	// Step 3-4: Optionally fetch waifu image with responsive sizing.
 	var imageContent string
 	if b.config.WaifuEnabled {
+		// Determine layout mode and waifu size based on terminal width.
+		layoutMode := DetermineLayoutMode(b.config.TermWidth)
+		waifuSize := GetWaifuSize(layoutMode)
+
 		selectorCfg := status.DefaultSelectorConfig()
 		if b.config.WaifuCategory != "" {
 			selectorCfg.OverrideCategory = b.config.WaifuCategory
@@ -129,7 +133,7 @@ func (b *Banner) Generate(ctx context.Context) (string, error) {
 		selector := status.NewSelector(selectorCfg)
 		category := selector.SelectCategory(systemStatus.Overall)
 
-		imageContent = b.fetchWaifuImage(ctx, category)
+		imageContent = b.fetchWaifuImage(ctx, category, waifuSize.Cols, waifuSize.Rows)
 	}
 
 	// Step 5: Determine hostname.
@@ -217,15 +221,16 @@ func (b *Banner) loadCachedDataWithFastfetch(store *cache.Store) (claude *collec
 	return claude, billing, infra, fastfetch
 }
 
-// fetchWaifuImage retrieves a waifu image for the given category.
+// fetchWaifuImage retrieves a waifu image for the given category with the specified size.
 // If WaifuSessionID is explicitly set (via --session-id flag or PPULSE_SESSION_ID env var),
 // uses per-session caching where each shell session gets its own unique image
 // with LRU eviction when MaxSessions is exceeded. This enables fetching new images
 // from the API if none is cached for the session.
 // Otherwise falls back to category-based caching (all sessions share same image),
 // which only reads from existing cache without network calls.
+// The maxCols and maxRows parameters control the rendered image dimensions.
 // Returns the rendered image string, or empty string on any error (non-fatal).
-func (b *Banner) fetchWaifuImage(ctx context.Context, category string) string {
+func (b *Banner) fetchWaifuImage(ctx context.Context, category string, maxCols, maxRows int) string {
 	select {
 	case <-ctx.Done():
 		return ""
@@ -300,8 +305,8 @@ func (b *Banner) fetchWaifuImage(ctx context.Context, category string) string {
 
 	rendered, err := waifu.RenderImage(data, waifu.RenderConfig{
 		Protocol: waifu.DetectProtocol(),
-		MaxCols:  20,
-		MaxRows:  10,
+		MaxCols:  maxCols,
+		MaxRows:  maxRows,
 	})
 	if err != nil {
 		b.config.Logger.Warn("banner: image render error", "error", err)
@@ -449,16 +454,20 @@ func (b *Banner) GenerateResponsive(ctx context.Context) (string, error) {
 	evaluator := status.NewEvaluator(status.DefaultEvaluatorConfig())
 	systemStatus := evaluator.Evaluate(claude, billing, infra)
 
-	// Step 3: Optionally fetch waifu image.
+	// Step 3: Optionally fetch waifu image with responsive sizing.
 	var imageContent string
 	if b.config.WaifuEnabled {
+		// Determine layout mode and waifu size based on terminal width.
+		layoutMode := DetermineLayoutMode(b.config.TermWidth)
+		waifuSize := GetWaifuSize(layoutMode)
+
 		selectorCfg := status.DefaultSelectorConfig()
 		if b.config.WaifuCategory != "" {
 			selectorCfg.OverrideCategory = b.config.WaifuCategory
 		}
 		selector := status.NewSelector(selectorCfg)
 		category := selector.SelectCategory(systemStatus.Overall)
-		imageContent = b.fetchWaifuImage(ctx, category)
+		imageContent = b.fetchWaifuImage(ctx, category, waifuSize.Cols, waifuSize.Rows)
 	}
 
 	// Step 4: Determine hostname.

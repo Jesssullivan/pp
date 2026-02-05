@@ -1,6 +1,7 @@
 package banner
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -743,4 +744,80 @@ func stripANSI(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// TestDetermineLayoutMode verifies layout mode selection based on terminal width.
+func TestDetermineLayoutMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		termWidth int
+		wantMode  LayoutMode
+	}{
+		{"compact at 80", 80, LayoutCompact},
+		{"compact at 119", 119, LayoutCompact},
+		{"standard at 120", 120, LayoutStandard},
+		{"standard at 159", 159, LayoutStandard},
+		{"wide at 160", 160, LayoutWide},
+		{"wide at 199", 199, LayoutWide},
+		{"ultrawide at 200", 200, LayoutUltraWide},
+		{"ultrawide at 240", 240, LayoutUltraWide},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DetermineLayoutMode(tt.termWidth)
+			if got != tt.wantMode {
+				t.Errorf("DetermineLayoutMode(%d) = %d, want %d", tt.termWidth, got, tt.wantMode)
+			}
+		})
+	}
+}
+
+// TestGetWaifuSize verifies waifu image dimensions for each layout mode.
+func TestGetWaifuSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     LayoutMode
+		wantCols int
+		wantRows int
+	}{
+		{"compact size", LayoutCompact, 16, 8},
+		{"standard size", LayoutStandard, 22, 11},
+		{"wide size", LayoutWide, 22, 11},
+		{"ultrawide size", LayoutUltraWide, 32, 16},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			size := GetWaifuSize(tt.mode)
+			if size.Cols != tt.wantCols || size.Rows != tt.wantRows {
+				t.Errorf("GetWaifuSize(%d) = %dx%d, want %dx%d", tt.mode, size.Cols, size.Rows, tt.wantCols, tt.wantRows)
+			}
+		})
+	}
+}
+
+// TestWaifuSizeIntegration tests the full responsive sizing pipeline.
+func TestWaifuSizeIntegration(t *testing.T) {
+	// Test that the full pipeline works correctly.
+	tests := []struct {
+		termWidth int
+		wantCols  int
+		wantRows  int
+	}{
+		{80, 16, 8},    // Compact
+		{120, 22, 11},  // Standard
+		{160, 22, 11},  // Wide
+		{240, 32, 16},  // UltraWide
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("width_%d", tt.termWidth), func(t *testing.T) {
+			mode := DetermineLayoutMode(tt.termWidth)
+			size := GetWaifuSize(mode)
+			if size.Cols != tt.wantCols || size.Rows != tt.wantRows {
+				t.Errorf("termWidth %d: expected %dx%d, got %dx%d", tt.termWidth, tt.wantCols, tt.wantRows, size.Cols, size.Rows)
+			}
+		})
+	}
 }

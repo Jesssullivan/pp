@@ -6,6 +6,19 @@ import (
 	"time"
 )
 
+// ========== Claude Status Constants ==========
+
+const (
+	StatusOK           = "ok"
+	StatusActive       = "active"
+	StatusAuthFailed   = "auth_failed"
+	StatusTokenExpired = "token_expired"
+	StatusRateLimited  = "rate_limited"
+	StatusNetworkError = "network_error"
+	StatusCloudflare   = "cloudflare"
+	StatusError        = "error"
+)
+
 // ========== Claude Usage Models ==========
 
 // ClaudeUsage holds usage data across all configured Claude accounts.
@@ -28,8 +41,19 @@ type ClaudeAccountUsage struct {
 	Tier string `json:"tier"`
 
 	// Status indicates the account's current state.
-	// Values: "ok", "auth_failed", "rate_limited", "disabled"
+	// Values: "ok", "active", "auth_failed", "token_expired", "rate_limited",
+	// "network_error", "cloudflare", "error"
 	Status string `json:"status"`
+
+	// ErrorReason provides additional context when Status is not "ok"/"active".
+	// Examples: "OAuth token expired", "Cloudflare challenge", "Network timeout"
+	ErrorReason string `json:"error_reason,omitempty"`
+
+	// ShortName is a 4-character label for compact display (from config).
+	ShortName string `json:"short_name,omitempty"`
+
+	// Priority affects collection order and display sorting (lower = higher priority).
+	Priority int `json:"priority,omitempty"`
 
 	// FiveHour is the 5-hour rolling usage window (subscription only).
 	FiveHour *UsagePeriod `json:"five_hour,omitempty"`
@@ -233,6 +257,15 @@ type BillingSummary struct {
 
 	// BudgetUSD is the total budget across all providers, if set.
 	BudgetUSD *float64 `json:"budget_usd,omitempty"`
+
+	// SuccessCount is the number of providers that successfully returned data.
+	SuccessCount int `json:"success_count"`
+
+	// ErrorCount is the number of providers that failed to return data.
+	ErrorCount int `json:"error_count"`
+
+	// TotalConfigured is the total number of configured billing providers.
+	TotalConfigured int `json:"total_configured"`
 }
 
 // BillingHistory holds 30-day rolling spend history for sparkline visualization.
@@ -397,15 +430,53 @@ func formatRelativeTime(t time.Time) string {
 // Format: account_name:tier utilization% (resets Xh Ym) | account_name:tier utilization%
 // Accounts with warnings are marked with a warning indicator.
 // High utilization (>80%) is marked with ⚠️.
+// Uses a default max width of 120 characters.
 func (c *ClaudeUsage) StarshipOutput() string {
+	return c.StarshipOutputWithWidth(120)
+}
+
+// StarshipOutputWithWidth generates output constrained to maxWidth characters.
+// Falls back through progressively more compact formats as needed:
+// 1. Full format (all accounts with details)
+// 2. Condensed format (aggregate stats with highest utilization)
+// 3. Critical-only format (only problems or high utilization)
+func (c *ClaudeUsage) StarshipOutputWithWidth(maxWidth int) string {
 	if c == nil || len(c.Accounts) == 0 {
 		return ""
 	}
 
+	// Sort accounts by priority (lower = higher priority), then by utilization
+	sorted := sortAccountsForDisplay(c.Accounts)
+
+	// Try full format first
+	full := formatFullClaude(sorted)
+	if len(full) <= maxWidth {
+		return full
+	}
+
+	// Fall back to condensed format
+	condensed := formatCondensedClaude(sorted)
+	if len(condensed) <= maxWidth {
+		return condensed
+	}
+
+	// Ultimate fallback: critical-only
+	return formatCriticalOnlyClaude(sorted)
+}
+
+// formatFullClaude renders all accounts in full detail.
+func formatFullClaude(accounts []ClaudeAccountUsage) string {
 	var parts []string
-	for _, acct := range c.Accounts {
-		if acct.Status != "ok" {
-			parts = append(parts, fmt.Sprintf("%s:ERR", acct.Name))
+	for _, acct := range accounts {
+		// Use shortName if set, otherwise use full name
+		label := acct.ShortName
+		if label == "" {
+			label = acct.Name
+		}
+
+		// Show specific error tags for better diagnostics
+		if acct.Status != StatusOK && acct.Status != StatusActive {
+			parts = append(parts, fmt.Sprintf("%s:%s", label, statusTagClaude(acct.Status)))
 			continue
 		}
 
@@ -416,7 +487,7 @@ func (c *ClaudeUsage) StarshipOutput() string {
 			if acct.FiveHour != nil {
 				utilization = acct.FiveHour.Utilization
 				if !acct.FiveHour.ResetsAt.IsZero() {
-					resetStr = formatRelativeTime(acct.FiveHour.ResetsAt)
+					resetStr = formatCompactReset(acct.FiveHour.ResetsAt)
 				}
 			}
 		case "api":
@@ -424,44 +495,348 @@ func (c *ClaudeUsage) StarshipOutput() string {
 				used := acct.RateLimits.RequestsLimit - acct.RateLimits.RequestsRemaining
 				utilization = float64(used) / float64(acct.RateLimits.RequestsLimit) * 100
 				if !acct.RateLimits.RequestsReset.IsZero() {
-					resetStr = formatRelativeTime(acct.RateLimits.RequestsReset)
+					resetStr = formatCompactReset(acct.RateLimits.RequestsReset)
 				}
 			}
 		}
 
 		// Build output with optional reset time and warning
-		output := fmt.Sprintf("%s:%s %.0f%%", acct.Name, acct.Tier, utilization)
+		part := fmt.Sprintf("%s:%s %.0f%%", label, acct.Tier, utilization)
 		if resetStr != "" {
-			output += fmt.Sprintf(" (%s)", resetStr)
+			part += fmt.Sprintf("(%s)", resetStr)
 		}
 		if utilization >= 80 {
-			output += " ⚠️"
+			part += "⚠️"
 		}
 
-		parts = append(parts, output)
+		parts = append(parts, part)
 	}
 
 	return strings.Join(parts, " | ")
 }
 
+// formatCondensedClaude shows aggregate stats with highest utilization account.
+func formatCondensedClaude(accounts []ClaudeAccountUsage) string {
+	healthy := 0
+	var errors []string
+	var maxUtil float64
+	var maxUtilAcct *ClaudeAccountUsage
+
+	for i := range accounts {
+		acct := &accounts[i]
+		if acct.Status == StatusOK || acct.Status == StatusActive {
+			healthy++
+			util := getAccountUtilization(acct)
+			if util > maxUtil {
+				maxUtil = util
+				maxUtilAcct = acct
+			}
+		} else {
+			errors = append(errors, statusTagClaude(acct.Status))
+		}
+	}
+
+	parts := []string{fmt.Sprintf("⚡ %d/%d", healthy, len(accounts))}
+
+	if maxUtilAcct != nil {
+		label := maxUtilAcct.ShortName
+		if label == "" {
+			label = truncateString(maxUtilAcct.Name, 4)
+		}
+
+		var resetStr string
+		if maxUtilAcct.Type == "subscription" && maxUtilAcct.FiveHour != nil && !maxUtilAcct.FiveHour.ResetsAt.IsZero() {
+			resetStr = formatCompactReset(maxUtilAcct.FiveHour.ResetsAt)
+		} else if maxUtilAcct.Type == "api" && maxUtilAcct.RateLimits != nil && !maxUtilAcct.RateLimits.RequestsReset.IsZero() {
+			resetStr = formatCompactReset(maxUtilAcct.RateLimits.RequestsReset)
+		}
+
+		part := fmt.Sprintf("%s:%.0f%%", label, maxUtil)
+		if resetStr != "" {
+			part += fmt.Sprintf("(%s)", resetStr)
+		}
+		if maxUtil >= 80 {
+			part += "⚠️"
+		}
+		parts = append(parts, part)
+	}
+
+	if len(errors) > 0 {
+		// Deduplicate error tags
+		unique := uniqueStrings(errors)
+		parts = append(parts, strings.Join(unique, ","))
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+// formatCriticalOnlyClaude shows only accounts with problems or high utilization.
+func formatCriticalOnlyClaude(accounts []ClaudeAccountUsage) string {
+	var parts []string
+
+	for _, acct := range accounts {
+		label := acct.ShortName
+		if label == "" {
+			label = truncateString(acct.Name, 4)
+		}
+
+		// Show errors
+		if acct.Status != StatusOK && acct.Status != StatusActive {
+			parts = append(parts, fmt.Sprintf("%s:%s", label, statusTagClaude(acct.Status)))
+			continue
+		}
+
+		// Show high utilization (>= 80%)
+		util := getAccountUtilization(&acct)
+		if util >= 80 {
+			var resetStr string
+			if acct.Type == "subscription" && acct.FiveHour != nil && !acct.FiveHour.ResetsAt.IsZero() {
+				resetStr = formatCompactReset(acct.FiveHour.ResetsAt)
+			} else if acct.Type == "api" && acct.RateLimits != nil && !acct.RateLimits.RequestsReset.IsZero() {
+				resetStr = formatCompactReset(acct.RateLimits.RequestsReset)
+			}
+
+			part := fmt.Sprintf("⚠️ %s:%.0f%%", label, util)
+			if resetStr != "" {
+				part += fmt.Sprintf("(%s)", resetStr)
+			}
+			parts = append(parts, part)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "✓ All OK"
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+// sortAccountsForDisplay sorts accounts by priority (lower = higher), then by utilization (desc).
+func sortAccountsForDisplay(accounts []ClaudeAccountUsage) []ClaudeAccountUsage {
+	sorted := make([]ClaudeAccountUsage, len(accounts))
+	copy(sorted, accounts)
+
+	// Bubble sort (sufficient for max 5 accounts)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			iPriority := sorted[i].Priority
+			jPriority := sorted[j].Priority
+			if iPriority == 0 {
+				iPriority = 10 // Default priority
+			}
+			if jPriority == 0 {
+				jPriority = 10
+			}
+
+			// Sort by priority first
+			if jPriority < iPriority {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+				continue
+			}
+
+			// If same priority, sort by utilization (descending)
+			if jPriority == iPriority {
+				iUtil := getAccountUtilization(&sorted[i])
+				jUtil := getAccountUtilization(&sorted[j])
+				if jUtil > iUtil {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+				}
+			}
+		}
+	}
+
+	return sorted
+}
+
+// getAccountUtilization extracts the primary utilization percentage for an account.
+func getAccountUtilization(acct *ClaudeAccountUsage) float64 {
+	if acct.Type == "subscription" && acct.FiveHour != nil {
+		return acct.FiveHour.Utilization
+	}
+	if acct.Type == "api" && acct.RateLimits != nil && acct.RateLimits.RequestsLimit > 0 {
+		used := acct.RateLimits.RequestsLimit - acct.RateLimits.RequestsRemaining
+		return float64(used) / float64(acct.RateLimits.RequestsLimit) * 100
+	}
+	return 0
+}
+
+// formatCompactReset returns ultra-compact time formatting (2h, 45m, 3d).
+func formatCompactReset(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+
+	d := time.Until(t)
+	if d <= 0 {
+		return "now"
+	}
+
+	hours := int(d.Hours())
+	if hours >= 24 {
+		return fmt.Sprintf("%dd", hours/24)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dm", int(d.Minutes()))
+}
+
+// statusTagClaude returns a short error tag for a status string.
+func statusTagClaude(status string) string {
+	switch status {
+	case StatusAuthFailed, StatusTokenExpired:
+		return "AUTH"
+	case StatusRateLimited:
+		return "RATE"
+	case StatusCloudflare:
+		return "CF"
+	case StatusNetworkError:
+		return "NET"
+	default:
+		return "ERR"
+	}
+}
+
+// truncateString truncates a string to maxLen characters.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+// uniqueStrings returns a deduplicated slice of strings.
+func uniqueStrings(input []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, s := range input {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// ========== Billing Helpers ==========
+
+// renderSparkline generates a Unicode sparkline from daily spend values.
+// Uses Unicode block elements: ▁▂▃▄▅▆▇█
+func renderSparkline(values []float64) string {
+	if len(values) == 0 {
+		return ""
+	}
+
+	// Find min and max for normalization
+	min, max := values[0], values[0]
+	for _, v := range values {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+
+	// Handle flat line (all values the same)
+	if max == min {
+		// Use middle height bar
+		return strings.Repeat("▄", len(values))
+	}
+
+	// Map to 8 levels of Unicode block elements
+	chars := []rune("▁▂▃▄▅▆▇█")
+	var result strings.Builder
+	for _, v := range values {
+		// Normalize to 0-7 range
+		normalized := (v - min) / (max - min) * 7
+		index := int(normalized)
+		if index > 7 {
+			index = 7
+		}
+		result.WriteRune(chars[index])
+	}
+
+	return result.String()
+}
+
+// calculateBudgetAlert determines if spending exceeds the alert threshold.
+// Returns a visual indicator: "⚠️" for warning (>threshold), "🔴" for critical (>100%), or "" for OK.
+func calculateBudgetAlert(currentSpend, budget, threshold float64) string {
+	if budget <= 0 {
+		return ""
+	}
+
+	percentage := (currentSpend / budget) * 100
+
+	if percentage >= 100 {
+		return "🔴" // Critical: over budget
+	}
+	if percentage >= threshold {
+		return "⚠️" // Warning: approaching budget
+	}
+	return "" // OK
+}
+
+// getBudgetPercentage calculates the percentage of budget used.
+func getBudgetPercentage(currentSpend, budget float64) float64 {
+	if budget <= 0 {
+		return 0
+	}
+	return (currentSpend / budget) * 100
+}
+
 // StarshipOutput generates a one-line string suitable for a Starship custom module.
-// Format: $total_spend ($forecast forecast)
+// Format: $total_spend [sparkline] [budget%] [forecast] [with error context if applicable]
 func (b *BillingData) StarshipOutput() string {
 	if b == nil {
 		return ""
 	}
 
-	output := fmt.Sprintf("$%.0f", b.Total.CurrentMonthUSD)
+	// Show diagnostic context if no providers succeeded
+	if b.Total.SuccessCount == 0 {
+		if b.Total.TotalConfigured == 0 {
+			return "$ -- (no providers)"
+		}
+		return fmt.Sprintf("$ -- (%d/%d failed)", b.Total.ErrorCount, b.Total.TotalConfigured)
+	}
 
+	var parts []string
+
+	// Current spend
+	parts = append(parts, fmt.Sprintf("$%.0f", b.Total.CurrentMonthUSD))
+
+	// Sparkline from history (if available)
+	if b.History != nil && len(b.History.TotalHistory) > 0 {
+		values := GetSpendValues(b.History.TotalHistory)
+		sparkline := renderSparkline(values)
+		if sparkline != "" {
+			parts = append(parts, sparkline)
+		}
+	}
+
+	// Budget percentage and alert
+	if b.Total.BudgetUSD != nil && *b.Total.BudgetUSD > 0 {
+		pct := getBudgetPercentage(b.Total.CurrentMonthUSD, *b.Total.BudgetUSD)
+		alert := calculateBudgetAlert(b.Total.CurrentMonthUSD, *b.Total.BudgetUSD, 70.0) // Default 70% threshold
+		budgetStr := fmt.Sprintf("%.0f%%", pct)
+		if alert != "" {
+			budgetStr += alert
+		}
+		parts = append(parts, budgetStr)
+	}
+
+	// Forecast (if available)
 	if b.Total.ForecastUSD != nil {
-		output += fmt.Sprintf(" ($%.0f forecast)", *b.Total.ForecastUSD)
+		parts = append(parts, fmt.Sprintf("~$%.0f", *b.Total.ForecastUSD))
 	}
 
-	if b.Total.BudgetUSD != nil && b.Total.CurrentMonthUSD > *b.Total.BudgetUSD {
-		output += " OVER BUDGET"
+	// Error count warning
+	if b.Total.ErrorCount > 0 {
+		parts = append(parts, fmt.Sprintf("(%d err)", b.Total.ErrorCount))
 	}
 
-	return output
+	return strings.Join(parts, " ")
 }
 
 // StarshipOutput generates a one-line string suitable for a Starship custom module.

@@ -153,14 +153,14 @@ func withMockFactories(
 // --- Tests ---
 
 func TestName(t *testing.T) {
-	c := NewClaudeCollector(nil, nil)
+	c := NewClaudeCollector(nil, nil, 0)
 	if got := c.Name(); got != "claude" {
 		t.Errorf("Name() = %q, want %q", got, "claude")
 	}
 }
 
 func TestDescription(t *testing.T) {
-	c := NewClaudeCollector(nil, nil)
+	c := NewClaudeCollector(nil, nil, 0)
 	want := "Claude AI usage across subscription and API accounts"
 	if got := c.Description(); got != want {
 		t.Errorf("Description() = %q, want %q", got, want)
@@ -168,7 +168,7 @@ func TestDescription(t *testing.T) {
 }
 
 func TestInterval(t *testing.T) {
-	c := NewClaudeCollector(nil, nil)
+	c := NewClaudeCollector(nil, nil, 0)
 	want := 15 * time.Minute
 	if got := c.Interval(); got != want {
 		t.Errorf("Interval() = %v, want %v", got, want)
@@ -176,7 +176,7 @@ func TestInterval(t *testing.T) {
 }
 
 func TestCollect_ZeroAccounts(t *testing.T) {
-	c := NewClaudeCollector(nil, testLogger())
+	c := NewClaudeCollector(nil, testLogger(), 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -206,7 +206,7 @@ func TestCollect_DisabledAccounts(t *testing.T) {
 		{Name: "disabled-api", Type: "api", APIKeyEnv: "TEST_KEY", Enabled: false},
 	}
 
-	c := NewClaudeCollector(accounts, testLogger())
+	c := NewClaudeCollector(accounts, testLogger(), 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -235,7 +235,7 @@ func TestCollect_SingleSubscription(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, nil, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -287,7 +287,7 @@ func TestCollect_SingleAPIAccount(t *testing.T) {
 	}
 
 	withMockFactories(nil, mockRate, nil, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -350,7 +350,7 @@ func TestCollect_MixedAccounts(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, mockRate, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -422,7 +422,7 @@ func TestCollect_ErrorIsolation(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, mockRate, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -471,7 +471,7 @@ func TestCollect_ExpiredCredentials(t *testing.T) {
 	}
 
 	withMockFactories(nil, nil, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -509,7 +509,7 @@ func TestCollect_MissingAPIKey(t *testing.T) {
 		{Name: "no-key", Type: "api", APIKeyEnv: "TEST_MISSING_KEY", Enabled: true},
 	}
 
-	c := NewClaudeCollector(accounts, testLogger())
+	c := NewClaudeCollector(accounts, testLogger(), 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -548,7 +548,7 @@ func TestCollect_ContextCancellation(t *testing.T) {
 		{Name: "will-not-run", Type: "subscription", CredentialsPath: "/creds/test.json", Enabled: true},
 	}
 
-	c := NewClaudeCollector(accounts, testLogger())
+	c := NewClaudeCollector(accounts, testLogger(), 0)
 	_, err := c.Collect(ctx)
 	if err == nil {
 		t.Fatal("Collect() with cancelled context should return error")
@@ -579,7 +579,7 @@ func TestCollect_ContextCancellationDuringFetch(t *testing.T) {
 	}
 
 	withMockFactories(slowFetcher, nil, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(ctx)
 
 		// The collector might return an error from the post-collection context
@@ -621,7 +621,7 @@ func TestCollect_FetchUsageHTTPError(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, nil, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -655,7 +655,7 @@ func TestCollect_RateLimitFetcherError(t *testing.T) {
 	}
 
 	withMockFactories(nil, mockRate, nil, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -686,7 +686,7 @@ func TestCollect_UnknownAccountType(t *testing.T) {
 		{Name: "mystery", Type: "unknown_type", Enabled: true},
 	}
 
-	c := NewClaudeCollector(accounts, testLogger())
+	c := NewClaudeCollector(accounts, testLogger(), 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -714,7 +714,7 @@ func TestCollect_UnknownAccountType(t *testing.T) {
 func TestCollect_TimestampIsRecent(t *testing.T) {
 	before := time.Now()
 
-	c := NewClaudeCollector(nil, testLogger())
+	c := NewClaudeCollector(nil, testLogger(), 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -741,7 +741,7 @@ func TestCollect_MixedEnabledDisabled(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, nil, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -782,7 +782,7 @@ func TestCollect_OrderPreserved(t *testing.T) {
 	}
 
 	withMockFactories(mockFetcher, mockRate, mockCreds, func() {
-		c := NewClaudeCollector(accounts, testLogger())
+		c := NewClaudeCollector(accounts, testLogger(), 0)
 		result, err := c.Collect(context.Background())
 		if err != nil {
 			t.Fatalf("Collect() returned unexpected error: %v", err)
@@ -802,7 +802,7 @@ func TestCollect_OrderPreserved(t *testing.T) {
 
 func TestCollect_NilLogger(t *testing.T) {
 	// Verify NewClaudeCollector with nil logger does not panic.
-	c := NewClaudeCollector(nil, nil)
+	c := NewClaudeCollector(nil, nil, 0)
 	result, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect() returned unexpected error: %v", err)

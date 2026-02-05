@@ -111,7 +111,7 @@ func TestClaudeUsage_StarshipOutput_ErrorStatus(t *testing.T) {
 	}
 
 	got := usage.StarshipOutput()
-	want := "broken:ERR"
+	want := "broken:AUTH" // auth_failed now maps to AUTH, not ERR
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
 	}
@@ -142,9 +142,9 @@ func TestClaudeUsage_StarshipOutput_MixedOkAndError(t *testing.T) {
 	}
 
 	got := usage.StarshipOutput()
-	// First account should show usage with reset time; second should show ERR.
-	if !containsSubstrings(got, []string{"good:pro 10%", "bad:ERR"}) {
-		t.Errorf("StarshipOutput() = %q, expected good:pro 10%% and bad:ERR", got)
+	// First account should show usage with reset time; second should show RATE (rate_limited).
+	if !containsSubstrings(got, []string{"good:pro 10%", "bad:RATE"}) {
+		t.Errorf("StarshipOutput() = %q, expected good:pro 10%% and bad:RATE", got)
 	}
 }
 
@@ -269,11 +269,13 @@ func TestBillingData_StarshipOutput_NormalSpend(t *testing.T) {
 		Total: BillingSummary{
 			CurrentMonthUSD: 75,
 			ForecastUSD:     &forecast,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
 	got := billing.StarshipOutput()
-	want := "$75 ($150 forecast)"
+	want := "$75 ~$150"
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
 	}
@@ -287,11 +289,13 @@ func TestBillingData_StarshipOutput_OverBudget(t *testing.T) {
 			CurrentMonthUSD: 120,
 			ForecastUSD:     &forecast,
 			BudgetUSD:       &budget,
+			SuccessCount:    1, // At least one provider succeeded
+			TotalConfigured: 1,
 		},
 	}
 
 	got := billing.StarshipOutput()
-	want := "$120 ($200 forecast) OVER BUDGET"
+	want := "$120 120%🔴 ~$200"
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
 	}
@@ -305,12 +309,14 @@ func TestBillingData_StarshipOutput_UnderBudget(t *testing.T) {
 			CurrentMonthUSD: 50,
 			ForecastUSD:     &forecast,
 			BudgetUSD:       &budget,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
 	got := billing.StarshipOutput()
-	// Under budget: no OVER BUDGET suffix.
-	want := "$50 ($80 forecast)"
+	// Under budget: shows percentage but no warning emoji.
+	want := "$50 25% ~$80"
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
 	}
@@ -320,6 +326,8 @@ func TestBillingData_StarshipOutput_NoForecast(t *testing.T) {
 	billing := &BillingData{
 		Total: BillingSummary{
 			CurrentMonthUSD: 42,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
@@ -336,12 +344,14 @@ func TestBillingData_StarshipOutput_NoBudget(t *testing.T) {
 		Total: BillingSummary{
 			CurrentMonthUSD: 80,
 			ForecastUSD:     &forecast,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
 	got := billing.StarshipOutput()
-	// No budget set, so no OVER BUDGET even if spend is high.
-	want := "$80 ($100 forecast)"
+	// No budget set, so no budget percentage shown.
+	want := "$80 ~$100"
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
 	}
@@ -359,6 +369,8 @@ func TestBillingData_StarshipOutput_ZeroSpend(t *testing.T) {
 	billing := &BillingData{
 		Total: BillingSummary{
 			CurrentMonthUSD: 0,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
@@ -370,19 +382,119 @@ func TestBillingData_StarshipOutput_ZeroSpend(t *testing.T) {
 }
 
 func TestBillingData_StarshipOutput_ExactBudget(t *testing.T) {
-	// Spend equals budget exactly -- should NOT show OVER BUDGET.
+	// Spend equals budget exactly -- shows 100% with critical emoji.
 	budget := 100.0
 	billing := &BillingData{
 		Total: BillingSummary{
 			CurrentMonthUSD: 100,
 			BudgetUSD:       &budget,
+			SuccessCount:    1,
+			TotalConfigured: 1,
 		},
 	}
 
 	got := billing.StarshipOutput()
-	want := "$100"
+	want := "$100 100%🔴"
 	if got != want {
 		t.Errorf("StarshipOutput() = %q, want %q", got, want)
+	}
+}
+
+func TestBillingData_StarshipOutput_WithSparkline(t *testing.T) {
+	forecast := 150.0
+	billing := &BillingData{
+		Total: BillingSummary{
+			CurrentMonthUSD: 75,
+			ForecastUSD:     &forecast,
+			SuccessCount:    1,
+			TotalConfigured: 1,
+		},
+		History: &BillingHistory{
+			TotalHistory: []DailySpend{
+				{Date: "2026-01-01", SpendUSD: 10},
+				{Date: "2026-01-02", SpendUSD: 20},
+				{Date: "2026-01-03", SpendUSD: 30},
+				{Date: "2026-01-04", SpendUSD: 40},
+				{Date: "2026-01-05", SpendUSD: 50},
+			},
+		},
+	}
+
+	got := billing.StarshipOutput()
+	// Should include sparkline (specific characters depend on normalization)
+	if !containsString(got, "$75") {
+		t.Errorf("StarshipOutput() = %q, should contain $75", got)
+	}
+	if !containsString(got, "~$150") {
+		t.Errorf("StarshipOutput() = %q, should contain ~$150", got)
+	}
+	// Verify sparkline is present (should be 5 Unicode block characters)
+	if len(got) < 20 {
+		t.Errorf("StarshipOutput() = %q, expected sparkline to be included", got)
+	}
+}
+
+func TestRenderSparkline_IncreasingTrend(t *testing.T) {
+	values := []float64{10, 20, 30, 40, 50}
+	sparkline := renderSparkline(values)
+
+	// Should render as increasing bars: ▁▂▃▅█ or similar
+	runes := []rune(sparkline)
+	if len(runes) != 5 {
+		t.Errorf("renderSparkline() produced %d runes, want 5", len(runes))
+	}
+
+	// First should be lower than last (comparing rune values)
+	if runes[0] > runes[4] {
+		t.Errorf("renderSparkline() = %q, expected increasing trend", sparkline)
+	}
+}
+
+func TestRenderSparkline_FlatLine(t *testing.T) {
+	values := []float64{50, 50, 50, 50, 50}
+	sparkline := renderSparkline(values)
+
+	// Flat line should render as middle height bars: ▄▄▄▄▄
+	expected := "▄▄▄▄▄"
+	if sparkline != expected {
+		t.Errorf("renderSparkline() = %q, want %q for flat line", sparkline, expected)
+	}
+}
+
+func TestRenderSparkline_Empty(t *testing.T) {
+	values := []float64{}
+	sparkline := renderSparkline(values)
+
+	if sparkline != "" {
+		t.Errorf("renderSparkline() = %q, want empty string for empty input", sparkline)
+	}
+}
+
+func TestCalculateBudgetAlert_UnderThreshold(t *testing.T) {
+	alert := calculateBudgetAlert(50, 100, 70)
+	if alert != "" {
+		t.Errorf("calculateBudgetAlert(50, 100, 70) = %q, want empty (no alert)", alert)
+	}
+}
+
+func TestCalculateBudgetAlert_AtThreshold(t *testing.T) {
+	alert := calculateBudgetAlert(70, 100, 70)
+	if alert != "⚠️" {
+		t.Errorf("calculateBudgetAlert(70, 100, 70) = %q, want ⚠️", alert)
+	}
+}
+
+func TestCalculateBudgetAlert_OverBudget(t *testing.T) {
+	alert := calculateBudgetAlert(120, 100, 70)
+	if alert != "🔴" {
+		t.Errorf("calculateBudgetAlert(120, 100, 70) = %q, want 🔴", alert)
+	}
+}
+
+func TestCalculateBudgetAlert_ExactlyAtBudget(t *testing.T) {
+	alert := calculateBudgetAlert(100, 100, 70)
+	if alert != "🔴" {
+		t.Errorf("calculateBudgetAlert(100, 100, 70) = %q, want 🔴", alert)
 	}
 }
 

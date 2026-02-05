@@ -188,7 +188,7 @@ func TestFetchWaifuImage_NoCacheReturnsEmpty(t *testing.T) {
 	cfg.WaifuCacheDir = filepath.Join(t.TempDir(), "waifu-empty")
 	b := NewBanner(cfg)
 
-	result := b.fetchWaifuImage(context.Background(), "happy")
+	result := b.fetchWaifuImage(context.Background(), "happy", 20, 10)
 	if result != "" {
 		t.Error("fetchWaifuImage with no cached image should return empty string")
 	}
@@ -201,7 +201,7 @@ func TestFetchWaifuImage_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	result := b.fetchWaifuImage(ctx, "happy")
+	result := b.fetchWaifuImage(ctx, "happy", 20, 10)
 	if result != "" {
 		t.Error("fetchWaifuImage with cancelled context should return empty string")
 	}

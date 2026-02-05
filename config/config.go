@@ -38,6 +38,11 @@ type DaemonConfig struct {
 	CacheDir string `yaml:"cache_dir"`
 	// LogFile is the path for daemon log output.
 	LogFile string `yaml:"log_file"`
+	// AccountStaggerDelay is the delay between account requests to prevent thundering herd.
+	// Format: duration string (e.g. "5s", "10s"). Default: "5s".
+	AccountStaggerDelay string `yaml:"account_stagger_delay"`
+	// MaxParallelAccounts limits concurrent account requests. Default: 3.
+	MaxParallelAccounts int `yaml:"max_parallel_accounts"`
 }
 
 // AccountsConfig holds all provider account configurations.
@@ -52,6 +57,8 @@ type AccountsConfig struct {
 	AWS AWSAccount `yaml:"aws"`
 	// DreamHost holds DreamHost account settings.
 	DreamHost DreamHostAccount `yaml:"dreamhost"`
+	// Budgets holds budget configuration for billing providers.
+	Budgets BudgetConfig `yaml:"budgets"`
 }
 
 // ClaudeAccount represents a single Claude account entry.
@@ -66,6 +73,17 @@ type ClaudeAccount struct {
 	APIKeyEnv string `yaml:"api_key_env"`
 	// Enabled controls whether this account is polled.
 	Enabled bool `yaml:"enabled"`
+	// Priority affects display order and collection sequence (lower = higher priority).
+	// Default: 10.
+	Priority int `yaml:"priority"`
+	// ShortName is a 4-character label for compact display. If empty, Name is truncated.
+	ShortName string `yaml:"short_name"`
+	// TierHint is the API tier for API accounts when auto-detection fails.
+	// Values: "tier_1", "tier_2", "tier_3", "tier_4".
+	TierHint string `yaml:"tier_hint"`
+	// PollInterval overrides the global poll interval for this account.
+	// Format: duration string (e.g. "15m", "30m").
+	PollInterval string `yaml:"poll_interval"`
 }
 
 // CivoAccount holds Civo cloud settings.
@@ -94,6 +112,28 @@ type AWSAccount struct {
 type DreamHostAccount struct {
 	// APIKeyEnv is the environment variable holding the DreamHost API key.
 	APIKeyEnv string `yaml:"api_key_env"`
+}
+
+// BudgetConfig holds budget configuration for billing providers.
+type BudgetConfig struct {
+	// TotalBudget is the combined monthly budget across all providers (USD).
+	TotalBudget float64 `yaml:"total_budget"`
+	// DefaultAlertThreshold is the default alert threshold percentage (0-100).
+	// Alerts trigger when spend reaches this percentage of budget. Default: 70.
+	DefaultAlertThreshold float64 `yaml:"default_alert_threshold"`
+	// Budgets holds per-provider budget settings.
+	Budgets map[string]ProviderBudget `yaml:"budgets"`
+}
+
+// ProviderBudget holds budget settings for a single provider.
+type ProviderBudget struct {
+	// MonthlyLimitUSD is the monthly spending limit in USD.
+	MonthlyLimitUSD float64 `yaml:"monthly_limit_usd"`
+	// AlertThreshold is the alert threshold percentage (0-100).
+	// Overrides DefaultAlertThreshold for this provider.
+	AlertThreshold float64 `yaml:"alert_threshold"`
+	// Enabled controls whether budget tracking is active for this provider.
+	Enabled bool `yaml:"enabled"`
 }
 
 // TailscaleConfig holds Tailscale mesh networking settings.
@@ -128,6 +168,16 @@ type KubeContext struct {
 	Namespace string `yaml:"namespace"`
 	// DashboardURL is the URL to the cluster dashboard.
 	DashboardURL string `yaml:"dashboard_url"`
+	// Platform identifies the provider: "civo", "doks", "rke2", "k3s", etc.
+	Platform string `yaml:"platform"`
+	// ClusterType is "managed" or "self-hosted".
+	ClusterType string `yaml:"cluster_type"`
+	// Timeout is the per-cluster kubectl timeout (e.g. "10s", "15s").
+	// Default: "10s".
+	Timeout string `yaml:"timeout"`
+	// Priority affects collection order (higher = earlier).
+	// Used to prioritize healthy clusters in degraded scenarios.
+	Priority int `yaml:"priority"`
 }
 
 // DisplayConfig holds TUI rendering settings.
@@ -186,9 +236,11 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Daemon: DaemonConfig{
-			PollInterval: "15m",
-			CacheDir:     filepath.Join(home, ".cache", "prompt-pulse"),
-			LogFile:      filepath.Join(home, ".local", "log", "prompt-pulse.log"),
+			PollInterval:        "15m",
+			CacheDir:            filepath.Join(home, ".cache", "prompt-pulse"),
+			LogFile:             filepath.Join(home, ".local", "log", "prompt-pulse.log"),
+			AccountStaggerDelay: "5s",
+			MaxParallelAccounts: 3,
 		},
 		Accounts: AccountsConfig{
 			Claude: []ClaudeAccount{
@@ -198,6 +250,10 @@ func DefaultConfig() *Config {
 					CredentialsPath: filepath.Join(home, ".claude", ".credentials.json"),
 					APIKeyEnv:       "",
 					Enabled:         true,
+					Priority:        10,
+					ShortName:       "",
+					TierHint:        "",
+					PollInterval:    "",
 				},
 			},
 			Civo: CivoAccount{
@@ -213,6 +269,11 @@ func DefaultConfig() *Config {
 			},
 			DreamHost: DreamHostAccount{
 				APIKeyEnv: "DREAMHOST_API_KEY",
+			},
+			Budgets: BudgetConfig{
+				TotalBudget:           0,
+				DefaultAlertThreshold: 70.0,
+				Budgets:               make(map[string]ProviderBudget),
 			},
 		},
 		Tailscale: TailscaleConfig{

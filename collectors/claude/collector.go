@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 
 	"gitlab.com/tinyland/lab/prompt-pulse/collectors"
@@ -98,6 +97,18 @@ type AccountConfig struct {
 
 	// Enabled controls whether this account is polled during collection.
 	Enabled bool
+
+	// Priority affects collection order (lower = higher priority). Default: 10.
+	Priority int
+
+	// ShortName is a 4-character label for compact display. If empty, Name is truncated.
+	ShortName string
+
+	// TierHint is the API tier hint for API accounts when auto-detection fails.
+	TierHint string
+
+	// PollInterval overrides the global poll interval for this account.
+	PollInterval string
 }
 
 // TokenRefresherInterface abstracts the token refresh operation for testing.
@@ -106,21 +117,27 @@ type TokenRefresherInterface interface {
 }
 
 // ClaudeCollector implements collectors.Collector for Claude usage data.
-// It coordinates concurrent data collection across multiple subscription
-// and API accounts, isolating per-account failures so one broken account
-// does not prevent collection from the others.
+// It coordinates data collection across multiple subscription and API accounts,
+// isolating per-account failures so one broken account does not prevent collection
+// from the others. Accounts are polled sequentially with a configurable stagger delay.
 type ClaudeCollector struct {
 	accounts       []AccountConfig
 	logger         *slog.Logger
 	credLoader     CredentialLoader
 	tokenRefresher TokenRefresherInterface
+	staggerDelay   time.Duration // Delay between account requests
 }
 
 // NewClaudeCollector creates a ClaudeCollector for the given accounts.
-// If logger is nil, a no-op logger is used.
-func NewClaudeCollector(accounts []AccountConfig, logger *slog.Logger) *ClaudeCollector {
+// If logger is nil, a no-op logger is used. The staggerDelay parameter controls
+// the delay between account requests (typically 5 seconds).
+func NewClaudeCollector(accounts []AccountConfig, logger *slog.Logger, staggerDelay time.Duration) *ClaudeCollector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	if staggerDelay == 0 {
+		staggerDelay = 5 * time.Second // Default
 	}
 
 	return &ClaudeCollector{
@@ -128,6 +145,7 @@ func NewClaudeCollector(accounts []AccountConfig, logger *slog.Logger) *ClaudeCo
 		logger:         logger,
 		credLoader:     newCredentialLoader(),
 		tokenRefresher: NewTokenRefresher(logger),
+		staggerDelay:   staggerDelay,
 	}
 }
 
@@ -152,11 +170,14 @@ type accountResult struct {
 	warnings []string
 }
 
-// Collect gathers usage data from all enabled Claude accounts concurrently.
+// Collect gathers usage data from all enabled Claude accounts sequentially with staggered delays.
 // Per-account errors are isolated: a failing account produces a result with
 // status "auth_failed" or "error" and a warning, but does not prevent other
 // accounts from being collected. Only a cancelled context returns an error
 // at the top level.
+//
+// Accounts are sorted by priority (lower = higher priority) and collected sequentially
+// with a stagger delay between requests to prevent API rate limiting.
 func (c *ClaudeCollector) Collect(ctx context.Context) (*collectors.CollectResult, error) {
 	// Check for context cancellation before starting.
 	select {
@@ -175,32 +196,40 @@ func (c *ClaudeCollector) Collect(ctx context.Context) (*collectors.CollectResul
 		}
 	}
 
-	// Collect from all enabled accounts concurrently.
+	// Sort accounts by priority (lower = higher priority)
+	enabled = sortAccountsByPriority(enabled)
+
+	// Collect from all enabled accounts sequentially with stagger delay.
 	results := make([]accountResult, len(enabled))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 	var allWarnings []string
 
 	for i, acct := range enabled {
-		wg.Add(1)
-		go func(idx int, account AccountConfig) {
-			defer wg.Done()
+		// Check context cancellation between accounts
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 
-			result := c.collectAccount(ctx, account)
-
-			results[idx] = result
-
-			if len(result.warnings) > 0 {
-				mu.Lock()
-				allWarnings = append(allWarnings, result.warnings...)
-				mu.Unlock()
+		// Stagger delay between requests (skip on first account)
+		if i > 0 && c.staggerDelay > 0 {
+			c.logger.Debug("stagger delay", "duration", c.staggerDelay)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(c.staggerDelay):
 			}
-		}(i, acct)
+		}
+
+		result := c.collectAccount(ctx, acct)
+		results[i] = result
+
+		if len(result.warnings) > 0 {
+			allWarnings = append(allWarnings, result.warnings...)
+		}
 	}
 
-	wg.Wait()
-
-	// Check for context cancellation after all goroutines complete.
+	// Check for context cancellation after all accounts complete.
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -352,6 +381,9 @@ func (c *ClaudeCollector) collectSubscription(ctx context.Context, acct AccountC
 		}
 	}
 
+	// Fill metadata from config
+	fillAccountMetadata(&usage, acct)
+
 	c.logger.Debug("subscription account collected successfully", "account", acct.Name, "tier", usage.Tier)
 
 	return accountResult{
@@ -404,10 +436,43 @@ func (c *ClaudeCollector) collectAPI(ctx context.Context, acct AccountConfig) ac
 		usage.Tier = "unknown"
 	}
 
+	// Fill metadata from config
+	fillAccountMetadata(usage, acct)
+
 	c.logger.Debug("API account collected successfully", "account", acct.Name, "tier", usage.Tier)
 
 	return accountResult{
 		usage: *usage,
+	}
+}
+
+// sortAccountsByPriority sorts accounts by priority (lower value = higher priority).
+// Accounts with the same priority maintain their original order (stable sort).
+func sortAccountsByPriority(accounts []AccountConfig) []AccountConfig {
+	// Create a copy to avoid modifying the input slice
+	sorted := make([]AccountConfig, len(accounts))
+	copy(sorted, accounts)
+
+	// Simple bubble sort (sufficient for small account counts)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].Priority < sorted[i].Priority {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	return sorted
+}
+
+// fillAccountMetadata populates standard account metadata fields from AccountConfig.
+func fillAccountMetadata(usage *collectors.ClaudeAccountUsage, acct AccountConfig) {
+	usage.ShortName = acct.ShortName
+	usage.Priority = acct.Priority
+
+	// If TierHint is provided and Tier is empty or unknown, use the hint
+	if acct.TierHint != "" && (usage.Tier == "" || usage.Tier == "unknown") {
+		usage.Tier = acct.TierHint
 	}
 }
 
