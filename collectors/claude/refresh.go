@@ -16,7 +16,13 @@ import (
 
 const (
 	// tokenEndpoint is the Claude OAuth token refresh endpoint.
-	tokenEndpoint = "https://api.claude.ai/api/auth/oauth/token"
+	// Uses platform.claude.com which is not behind Cloudflare protection,
+	// unlike claude.ai/api/auth/oauth/token which returns Cloudflare challenges.
+	tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
+
+	// oauthClientID is the Claude Code CLI OAuth client identifier.
+	// Required for token refresh requests to platform.claude.com.
+	oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 	// refreshBuffer is the time before expiration when a refresh is recommended.
 	// Tokens expiring within this window will report NeedsRefresh() = true.
@@ -59,6 +65,7 @@ func (r *TokenRefresher) RefreshToken(ctx context.Context, refreshToken string) 
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", refreshToken)
+	data.Set("client_id", oauthClientID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {

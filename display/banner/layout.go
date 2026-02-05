@@ -27,8 +27,16 @@ type LayoutConfig struct {
 	TermHeight int
 	// ImageCols is the width of the image column (default: 22).
 	ImageCols int
+	// SysInfoCols is the width of the system info column (default: 40).
+	// Only used in 3-column layout.
+	SysInfoCols int
+	// DashboardCols is the width of the dashboard column (remaining width).
+	// Only used in 3-column layout.
+	DashboardCols int
 	// ShowImage enables the image column (when false, only shows info).
 	ShowImage bool
+	// ShowFastfetch enables the fastfetch system info center column.
+	ShowFastfetch bool
 	// Hostname to display in the header.
 	Hostname string
 	// ColorEnabled enables ANSI colors.
@@ -38,20 +46,48 @@ type LayoutConfig struct {
 // DefaultLayoutConfig returns sensible defaults targeting 80x24.
 func DefaultLayoutConfig() LayoutConfig {
 	return LayoutConfig{
-		TermWidth:    80,
-		TermHeight:   24,
-		ImageCols:    22,
-		ShowImage:    true,
-		Hostname:     "",
-		ColorEnabled: true,
+		TermWidth:     80,
+		TermHeight:    24,
+		ImageCols:     22,
+		SysInfoCols:   40,
+		DashboardCols: 58,
+		ShowImage:     true,
+		ShowFastfetch: false,
+		Hostname:      "",
+		ColorEnabled:  true,
+	}
+}
+
+// ThreeColumnLayoutConfig returns configuration for the 3-column layout.
+// Layout: Waifu (22) | System Info (40) | Dashboard (58+)
+func ThreeColumnLayoutConfig(termWidth, termHeight int) LayoutConfig {
+	imageCols := 22
+	sysInfoCols := 40
+	separators := 6 // 2 separators " | "
+	dashboardCols := termWidth - imageCols - sysInfoCols - separators
+	if dashboardCols < 40 {
+		dashboardCols = 40
+	}
+
+	return LayoutConfig{
+		TermWidth:     termWidth,
+		TermHeight:    termHeight,
+		ImageCols:     imageCols,
+		SysInfoCols:   sysInfoCols,
+		DashboardCols: dashboardCols,
+		ShowImage:     true,
+		ShowFastfetch: true,
+		Hostname:      "",
+		ColorEnabled:  true,
 	}
 }
 
 // InfoData holds pre-formatted data for the info panel.
 type InfoData struct {
-	Claude  *collectors.ClaudeUsage
-	Billing *collectors.BillingData
-	Infra   *collectors.InfraStatus
+	Claude    *collectors.ClaudeUsage
+	Billing   *collectors.BillingData
+	Infra     *collectors.InfraStatus
+	Fastfetch *collectors.FastfetchData
 	// StatusLevel is the evaluated system status ("healthy", "warning", "critical", "unknown").
 	StatusLevel string
 	// Uptime is the system uptime string (optional).
@@ -72,6 +108,11 @@ func NewLayout(cfg LayoutConfig) *Layout {
 // image string (may be empty if ShowImage is false or no image available).
 // Returns the composed banner string ready for terminal output.
 func (l *Layout) Render(imageContent string, data InfoData) string {
+	// Check for 3-column layout (waifu | fastfetch | dashboard).
+	if l.config.ShowFastfetch && data.Fastfetch != nil && !data.Fastfetch.IsEmpty() {
+		return l.renderThreeColumn(imageContent, data)
+	}
+
 	infoPanel := l.renderInfoPanel(data)
 
 	showImage := l.config.ShowImage && imageContent != ""
@@ -84,6 +125,128 @@ func (l *Layout) Render(imageContent string, data InfoData) string {
 		lines = lines[:l.config.TermHeight]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderThreeColumn renders the 3-column layout:
+// Waifu (22 cols) | System Info (40 cols) | Live Dashboard (58+ cols)
+func (l *Layout) renderThreeColumn(imageContent string, data InfoData) string {
+	// Build system info panel from fastfetch data.
+	sysInfoPanel := l.renderFastfetchPanel(data.Fastfetch)
+
+	// Build dashboard panel (Claude, Billing, Infra).
+	dashboardPanel := l.renderDashboardPanel(data)
+
+	// Compose all three columns.
+	return l.composeThreeColumns(imageContent, sysInfoPanel, dashboardPanel)
+}
+
+// renderFastfetchPanel builds the center column with system info from fastfetch.
+func (l *Layout) renderFastfetchPanel(data *collectors.FastfetchData) string {
+	if data == nil || data.IsEmpty() {
+		return l.styledMuted("(no system info)")
+	}
+
+	var lines []string
+	lines = append(lines, l.sectionTitle("System Info"))
+	lines = append(lines, l.separator())
+
+	// Use compact format for the center column.
+	for _, line := range data.FormatCompact() {
+		// Truncate to fit SysInfoCols.
+		if visibleLen(line) > l.config.SysInfoCols-2 {
+			line = truncateToWidth(line, l.config.SysInfoCols-2)
+		}
+		lines = append(lines, "  "+line)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderDashboardPanel builds the right column with Claude, Billing, and Infra status.
+func (l *Layout) renderDashboardPanel(data InfoData) string {
+	var lines []string
+
+	hostname := l.config.Hostname
+	if hostname == "" {
+		hostname = "localhost"
+	}
+	lines = append(lines, l.renderHeader(hostname, data.StatusLevel))
+	lines = append(lines, l.separator())
+	lines = append(lines, "")
+
+	// Claude section.
+	lines = append(lines, l.sectionTitle("Claude"))
+	lines = append(lines, l.renderClaudeSummary(data.Claude)...)
+	lines = append(lines, "")
+
+	// Billing section.
+	lines = append(lines, l.sectionTitle("Billing"))
+	lines = append(lines, l.renderBillingSummary(data.Billing)...)
+	lines = append(lines, "")
+
+	// Infrastructure section.
+	lines = append(lines, l.sectionTitle("Infrastructure"))
+	lines = append(lines, l.renderInfraSummary(data.Infra)...)
+
+	if data.Uptime != "" {
+		lines = append(lines, "")
+		lines = append(lines, l.styledMuted(fmt.Sprintf("  uptime: %s", data.Uptime)))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// composeThreeColumns places image, sysInfo, and dashboard in three columns.
+func (l *Layout) composeThreeColumns(imageContent, sysInfoPanel, dashboardPanel string) string {
+	imageLines := []string{}
+	if imageContent != "" {
+		imageLines = strings.Split(imageContent, "\n")
+	}
+	sysInfoLines := strings.Split(sysInfoPanel, "\n")
+	dashboardLines := strings.Split(dashboardPanel, "\n")
+
+	maxRows := maxInt(len(imageLines), maxInt(len(sysInfoLines), len(dashboardLines)))
+	if maxRows > l.config.TermHeight {
+		maxRows = l.config.TermHeight
+	}
+
+	separator := " | "
+	if l.config.ColorEnabled {
+		separator = " " + lipgloss.NewStyle().Foreground(colorMuted).Render("|") + " "
+	}
+
+	var result []string
+
+	for i := 0; i < maxRows; i++ {
+		imgLine := ""
+		if i < len(imageLines) {
+			imgLine = imageLines[i]
+		}
+		sysLine := ""
+		if i < len(sysInfoLines) {
+			sysLine = sysInfoLines[i]
+		}
+		dashLine := ""
+		if i < len(dashboardLines) {
+			dashLine = dashboardLines[i]
+		}
+
+		// Pad columns to their widths.
+		imgLine = l.padToWidth(imgLine, l.config.ImageCols)
+		sysLine = l.padToWidth(sysLine, l.config.SysInfoCols)
+
+		result = append(result, imgLine+separator+sysLine+separator+dashLine)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// maxInt returns the larger of two integers.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // renderInfoPanel builds the right-side info panel.

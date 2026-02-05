@@ -1,0 +1,8 @@
+Claude                                                       │ Infrastructure
+  personal: ERR (auth_failed)                                │   ts: connection failed
+  work: ERR (rate_limited)                                   │   k8s: bitter-darkness (unreachable)
+                                                             │ 
+Billing                                                      │ 
+  digitalocean: ERR                                          │ 
+  civo: ERR                                                  │ 
+  Total: $0 (error)                                          │ 

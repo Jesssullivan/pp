@@ -539,3 +539,281 @@ func TestDefaultImageCacheConfig(t *testing.T) {
 		t.Error("Logger should not be nil")
 	}
 }
+
+// --- RenderedCache tests ---
+
+func TestRenderedCache_PutGet(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	sessionID := "test-session"
+	protocol := "kitty"
+	cols, rows := 40, 20
+	output := "\033_Gf=100,a=T,t=d,c=40,r=20,m=0;base64data\033\\"
+
+	cache.Put(sessionID, protocol, cols, rows, output)
+
+	entry, exists := cache.Get(sessionID, protocol, cols, rows)
+	if !exists {
+		t.Fatal("expected entry to exist")
+	}
+	if entry.Output != output {
+		t.Errorf("Output = %q, want %q", entry.Output, output)
+	}
+	if entry.Protocol != protocol {
+		t.Errorf("Protocol = %q, want %q", entry.Protocol, protocol)
+	}
+	if entry.Cols != cols {
+		t.Errorf("Cols = %d, want %d", entry.Cols, cols)
+	}
+	if entry.Rows != rows {
+		t.Errorf("Rows = %d, want %d", entry.Rows, rows)
+	}
+}
+
+func TestRenderedCache_Get_Missing(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	entry, exists := cache.Get("nonexistent", "kitty", 40, 20)
+	if exists {
+		t.Error("expected entry not to exist")
+	}
+	if entry != nil {
+		t.Error("expected nil entry for missing key")
+	}
+}
+
+func TestRenderedCache_Has(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	if cache.Has("test", "kitty", 40, 20) {
+		t.Error("Has should return false for non-existent entry")
+	}
+
+	cache.Put("test", "kitty", 40, 20, "output")
+
+	if !cache.Has("test", "kitty", 40, 20) {
+		t.Error("Has should return true for existing entry")
+	}
+}
+
+func TestRenderedCache_DifferentDimensions(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	// Same session and protocol, different dimensions should be different entries
+	cache.Put("session", "kitty", 40, 20, "output-40x20")
+	cache.Put("session", "kitty", 80, 40, "output-80x40")
+
+	entry1, exists1 := cache.Get("session", "kitty", 40, 20)
+	if !exists1 || entry1.Output != "output-40x20" {
+		t.Error("40x20 entry not found or incorrect")
+	}
+
+	entry2, exists2 := cache.Get("session", "kitty", 80, 40)
+	if !exists2 || entry2.Output != "output-80x40" {
+		t.Error("80x40 entry not found or incorrect")
+	}
+}
+
+func TestRenderedCache_DifferentProtocols(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	// Same session and dimensions, different protocols should be different entries
+	cache.Put("session", "kitty", 40, 20, "kitty-output")
+	cache.Put("session", "unicode", 40, 20, "unicode-output")
+
+	entry1, exists1 := cache.Get("session", "kitty", 40, 20)
+	if !exists1 || entry1.Output != "kitty-output" {
+		t.Error("kitty entry not found or incorrect")
+	}
+
+	entry2, exists2 := cache.Get("session", "unicode", 40, 20)
+	if !exists2 || entry2.Output != "unicode-output" {
+		t.Error("unicode entry not found or incorrect")
+	}
+}
+
+func TestRenderedCache_LRUEviction(t *testing.T) {
+	cfg := DefaultRenderedCacheConfig()
+	cfg.MaxEntries = 3
+	cache := NewRenderedCache(cfg)
+
+	// Add 3 entries
+	cache.Put("s1", "kitty", 40, 20, "output1")
+	cache.Put("s2", "kitty", 40, 20, "output2")
+	cache.Put("s3", "kitty", 40, 20, "output3")
+
+	// Access s1 to make it recently used
+	cache.Get("s1", "kitty", 40, 20)
+
+	// Add 4th entry, should evict s2 (oldest non-accessed)
+	cache.Put("s4", "kitty", 40, 20, "output4")
+
+	if !cache.Has("s1", "kitty", 40, 20) {
+		t.Error("s1 should survive (was accessed)")
+	}
+	if cache.Has("s2", "kitty", 40, 20) {
+		t.Error("s2 should be evicted (oldest)")
+	}
+	if !cache.Has("s3", "kitty", 40, 20) {
+		t.Error("s3 should survive")
+	}
+	if !cache.Has("s4", "kitty", 40, 20) {
+		t.Error("s4 should exist (just added)")
+	}
+}
+
+func TestRenderedCache_Invalidate(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	cache.Put("session", "kitty", 40, 20, "output")
+	if !cache.Has("session", "kitty", 40, 20) {
+		t.Fatal("entry should exist before invalidation")
+	}
+
+	cache.Invalidate("session", "kitty", 40, 20)
+	if cache.Has("session", "kitty", 40, 20) {
+		t.Error("entry should not exist after invalidation")
+	}
+}
+
+func TestRenderedCache_InvalidateSession(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	// Add entries for session1 with different configs
+	cache.Put("session1", "kitty", 40, 20, "output1")
+	cache.Put("session1", "unicode", 40, 20, "output2")
+	cache.Put("session1", "kitty", 80, 40, "output3")
+
+	// Add entry for session2
+	cache.Put("session2", "kitty", 40, 20, "output4")
+
+	// Invalidate session1
+	cache.InvalidateSession("session1")
+
+	// session1 entries should be gone
+	if cache.Has("session1", "kitty", 40, 20) {
+		t.Error("session1 kitty 40x20 should be invalidated")
+	}
+	if cache.Has("session1", "unicode", 40, 20) {
+		t.Error("session1 unicode 40x20 should be invalidated")
+	}
+	if cache.Has("session1", "kitty", 80, 40) {
+		t.Error("session1 kitty 80x40 should be invalidated")
+	}
+
+	// session2 should survive
+	if !cache.Has("session2", "kitty", 40, 20) {
+		t.Error("session2 should survive invalidation of session1")
+	}
+}
+
+func TestRenderedCache_Clear(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	cache.Put("s1", "kitty", 40, 20, "output1")
+	cache.Put("s2", "unicode", 40, 20, "output2")
+
+	cache.Clear()
+
+	if cache.Has("s1", "kitty", 40, 20) {
+		t.Error("s1 should be cleared")
+	}
+	if cache.Has("s2", "unicode", 40, 20) {
+		t.Error("s2 should be cleared")
+	}
+
+	count, _ := cache.Stats()
+	if count != 0 {
+		t.Errorf("entry count = %d, want 0 after clear", count)
+	}
+}
+
+func TestRenderedCache_Stats(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	output1 := "short"
+	output2 := "much longer output string for testing"
+
+	cache.Put("s1", "kitty", 40, 20, output1)
+	cache.Put("s2", "unicode", 40, 20, output2)
+
+	count, totalBytes := cache.Stats()
+	if count != 2 {
+		t.Errorf("entry count = %d, want 2", count)
+	}
+
+	expectedBytes := int64(len(output1) + len(output2))
+	if totalBytes != expectedBytes {
+		t.Errorf("total bytes = %d, want %d", totalBytes, expectedBytes)
+	}
+}
+
+func TestRenderedCache_UpdateExisting(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	cache.Put("session", "kitty", 40, 20, "original")
+	cache.Put("session", "kitty", 40, 20, "updated")
+
+	entry, exists := cache.Get("session", "kitty", 40, 20)
+	if !exists {
+		t.Fatal("entry should exist")
+	}
+	if entry.Output != "updated" {
+		t.Errorf("Output = %q, want 'updated'", entry.Output)
+	}
+
+	// Should still be only 1 entry
+	count, _ := cache.Stats()
+	if count != 1 {
+		t.Errorf("entry count = %d, want 1 (no duplicates)", count)
+	}
+}
+
+func TestRenderedCache_ConcurrentAccess(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+
+	const goroutines = 10
+	var wg sync.WaitGroup
+
+	// Concurrent writes
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			sessionID := fmt.Sprintf("session-%d", idx)
+			cache.Put(sessionID, "kitty", 40, 20, fmt.Sprintf("output-%d", idx))
+		}(i)
+	}
+	wg.Wait()
+
+	// Concurrent reads
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			sessionID := fmt.Sprintf("session-%d", idx)
+			entry, exists := cache.Get(sessionID, "kitty", 40, 20)
+			if !exists {
+				t.Errorf("session-%d should exist", idx)
+				return
+			}
+			expected := fmt.Sprintf("output-%d", idx)
+			if entry.Output != expected {
+				t.Errorf("session-%d output = %q, want %q", idx, entry.Output, expected)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestDefaultRenderedCacheConfig(t *testing.T) {
+	cfg := DefaultRenderedCacheConfig()
+
+	if cfg.MaxEntries != 50 {
+		t.Errorf("MaxEntries = %d, want 50", cfg.MaxEntries)
+	}
+
+	if cfg.Logger == nil {
+		t.Error("Logger should not be nil")
+	}
+}

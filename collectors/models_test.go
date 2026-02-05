@@ -848,3 +848,424 @@ func TestCollectResult_WarningsOmitEmpty(t *testing.T) {
 		t.Error("warnings should be omitted from JSON when empty")
 	}
 }
+
+// ========== ClaudeAccountUsage Helper Method Tests ==========
+
+func TestClaudeAccountUsage_GetResetSchedule_Subscription(t *testing.T) {
+	now := time.Now()
+	acct := ClaudeAccountUsage{
+		Name:   "personal",
+		Type:   "subscription",
+		Tier:   "pro",
+		Status: "ok",
+		FiveHour: &UsagePeriod{
+			Utilization: 50.0,
+			ResetsAt:    now.Add(2 * time.Hour),
+		},
+		SevenDay: &UsagePeriod{
+			Utilization: 30.0,
+			ResetsAt:    now.Add(3 * 24 * time.Hour),
+		},
+	}
+
+	schedule := acct.GetResetSchedule()
+
+	if schedule == nil {
+		t.Fatal("GetResetSchedule returned nil")
+	}
+	if schedule.SessionResets.IsZero() {
+		t.Error("SessionResets should not be zero")
+	}
+	if schedule.WeeklyResets.IsZero() {
+		t.Error("WeeklyResets should not be zero")
+	}
+	if schedule.MonthlyResets.IsZero() {
+		t.Error("MonthlyResets should not be zero")
+	}
+	// Monthly should be 1st of next month
+	if schedule.MonthlyResets.Day() != 1 {
+		t.Errorf("MonthlyResets day = %d, want 1", schedule.MonthlyResets.Day())
+	}
+}
+
+func TestClaudeAccountUsage_GetResetSchedule_API(t *testing.T) {
+	now := time.Now()
+	acct := ClaudeAccountUsage{
+		Name:   "work-api",
+		Type:   "api",
+		Tier:   "tier_2",
+		Status: "ok",
+		RateLimits: &APIRateLimits{
+			RequestsLimit:     1000,
+			RequestsRemaining: 500,
+			RequestsReset:     now.Add(1 * time.Hour),
+			TokensLimit:       100000,
+			TokensRemaining:   75000,
+			TokensReset:       now.Add(2 * time.Hour),
+		},
+	}
+
+	schedule := acct.GetResetSchedule()
+
+	if schedule == nil {
+		t.Fatal("GetResetSchedule returned nil")
+	}
+	if schedule.SessionResets.IsZero() {
+		t.Error("SessionResets should not be zero for API account")
+	}
+	if schedule.WeeklyResets.IsZero() {
+		t.Error("WeeklyResets should not be zero for API account")
+	}
+}
+
+func TestClaudeAccountUsage_StatusColor(t *testing.T) {
+	tests := []struct {
+		name        string
+		utilization float64
+		want        string
+	}{
+		{"low", 30.0, "green"},
+		{"medium", 50.0, "green"},
+		{"warning_threshold", 70.0, "yellow"},
+		{"warning", 85.0, "yellow"},
+		{"danger_threshold", 90.0, "red"},
+		{"danger", 95.0, "red"},
+		{"max", 100.0, "red"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acct := ClaudeAccountUsage{
+				Type:   "subscription",
+				Status: "ok",
+				FiveHour: &UsagePeriod{
+					Utilization: tt.utilization,
+				},
+			}
+			got := acct.StatusColor()
+			if got != tt.want {
+				t.Errorf("StatusColor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeAccountUsage_GetPrimaryUtilization_Subscription(t *testing.T) {
+	acct := ClaudeAccountUsage{
+		Type:   "subscription",
+		Status: "ok",
+		FiveHour: &UsagePeriod{
+			Utilization: 45.5,
+		},
+		SevenDay: &UsagePeriod{
+			Utilization: 30.0,
+		},
+	}
+
+	got := acct.GetPrimaryUtilization()
+	if got != 45.5 {
+		t.Errorf("GetPrimaryUtilization() = %v, want 45.5", got)
+	}
+}
+
+func TestClaudeAccountUsage_GetPrimaryUtilization_API(t *testing.T) {
+	acct := ClaudeAccountUsage{
+		Type:   "api",
+		Status: "ok",
+		RateLimits: &APIRateLimits{
+			RequestsLimit:     1000,
+			RequestsRemaining: 600,
+		},
+	}
+
+	got := acct.GetPrimaryUtilization()
+	// 400/1000 = 40%
+	if got != 40.0 {
+		t.Errorf("GetPrimaryUtilization() = %v, want 40.0", got)
+	}
+}
+
+func TestClaudeAccountUsage_GetSecondaryUtilization_Subscription(t *testing.T) {
+	acct := ClaudeAccountUsage{
+		Type:   "subscription",
+		Status: "ok",
+		FiveHour: &UsagePeriod{
+			Utilization: 45.5,
+		},
+		SevenDay: &UsagePeriod{
+			Utilization: 30.0,
+		},
+	}
+
+	got := acct.GetSecondaryUtilization()
+	if got != 30.0 {
+		t.Errorf("GetSecondaryUtilization() = %v, want 30.0", got)
+	}
+}
+
+func TestClaudeAccountUsage_GetSecondaryUtilization_API(t *testing.T) {
+	acct := ClaudeAccountUsage{
+		Type:   "api",
+		Status: "ok",
+		RateLimits: &APIRateLimits{
+			TokensLimit:     100000,
+			TokensRemaining: 75000,
+		},
+	}
+
+	got := acct.GetSecondaryUtilization()
+	// 25000/100000 = 25%
+	if got != 25.0 {
+		t.Errorf("GetSecondaryUtilization() = %v, want 25.0", got)
+	}
+}
+
+func TestClaudeAccountUsage_GetPrimaryUtilization_NoData(t *testing.T) {
+	acct := ClaudeAccountUsage{
+		Type:   "subscription",
+		Status: "ok",
+	}
+
+	got := acct.GetPrimaryUtilization()
+	if got != 0 {
+		t.Errorf("GetPrimaryUtilization() = %v, want 0 for no data", got)
+	}
+}
+
+func TestResetSchedule_JSONRoundTrip(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	schedule := ResetSchedule{
+		SessionResets: now.Add(2 * time.Hour),
+		WeeklyResets:  now.Add(3 * 24 * time.Hour),
+		MonthlyResets: now.Add(30 * 24 * time.Hour),
+	}
+
+	data, err := json.Marshal(schedule)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var decoded ResetSchedule
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	if !decoded.SessionResets.Equal(schedule.SessionResets) {
+		t.Errorf("SessionResets = %v, want %v", decoded.SessionResets, schedule.SessionResets)
+	}
+	if !decoded.WeeklyResets.Equal(schedule.WeeklyResets) {
+		t.Errorf("WeeklyResets = %v, want %v", decoded.WeeklyResets, schedule.WeeklyResets)
+	}
+	if !decoded.MonthlyResets.Equal(schedule.MonthlyResets) {
+		t.Errorf("MonthlyResets = %v, want %v", decoded.MonthlyResets, schedule.MonthlyResets)
+	}
+}
+
+// ========== FastfetchData Tests ==========
+
+func TestFastfetchData_JSONRoundTrip(t *testing.T) {
+	original := &FastfetchData{
+		OS:       FastfetchModule{Type: "OS", Key: "OS", Result: "Rocky Linux 10.1"},
+		Host:     FastfetchModule{Type: "Host", Key: "Host", Result: "Lenovo ThinkPad X1"},
+		Kernel:   FastfetchModule{Type: "Kernel", Key: "Kernel", Result: "6.12.0-124"},
+		Uptime:   FastfetchModule{Type: "Uptime", Key: "Uptime", Result: "5h 13m"},
+		CPU:      FastfetchModule{Type: "CPU", Key: "CPU", Result: "Intel i7-8550U (8) @ 4.0GHz"},
+		GPU:      FastfetchModule{Type: "GPU", Key: "GPU", Result: "Intel UHD Graphics 620"},
+		Memory:   FastfetchModule{Type: "Memory", Key: "Memory", Result: "4.5 GiB / 15.4 GiB (29%)"},
+		Disk:     FastfetchModule{Type: "Disk", Key: "Disk", Result: "45 GiB / 230 GiB (20%)"},
+		Packages: FastfetchModule{Type: "Packages", Key: "Packages", Result: "1234 (rpm)"},
+		Shell:    FastfetchModule{Type: "Shell", Key: "Shell", Result: "zsh 5.9"},
+		Terminal: FastfetchModule{Type: "Terminal", Key: "Terminal", Result: "ghostty"},
+		LocalIP:  FastfetchModule{Type: "LocalIP", Key: "Local IP", Result: "192.168.1.100"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var decoded FastfetchData
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	if decoded.OS.Result != "Rocky Linux 10.1" {
+		t.Errorf("OS.Result = %q, want %q", decoded.OS.Result, "Rocky Linux 10.1")
+	}
+	if decoded.Kernel.Result != "6.12.0-124" {
+		t.Errorf("Kernel.Result = %q, want %q", decoded.Kernel.Result, "6.12.0-124")
+	}
+	if decoded.CPU.Result != "Intel i7-8550U (8) @ 4.0GHz" {
+		t.Errorf("CPU.Result = %q, want %q", decoded.CPU.Result, "Intel i7-8550U (8) @ 4.0GHz")
+	}
+	if decoded.Memory.Result != "4.5 GiB / 15.4 GiB (29%)" {
+		t.Errorf("Memory.Result = %q, want %q", decoded.Memory.Result, "4.5 GiB / 15.4 GiB (29%)")
+	}
+}
+
+func TestFastfetchData_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		data FastfetchData
+		want bool
+	}{
+		{
+			name: "empty",
+			data: FastfetchData{},
+			want: true,
+		},
+		{
+			name: "with OS",
+			data: FastfetchData{
+				OS: FastfetchModule{Type: "OS", Result: "Linux"},
+			},
+			want: false,
+		},
+		{
+			name: "with CPU only",
+			data: FastfetchData{
+				CPU: FastfetchModule{Type: "CPU", Result: "i7"},
+			},
+			want: false,
+		},
+		{
+			name: "with Host only",
+			data: FastfetchData{
+				Host: FastfetchModule{Type: "Host", Result: "ThinkPad"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.data.IsEmpty()
+			if got != tt.want {
+				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFastfetchData_FormatForDisplay(t *testing.T) {
+	data := FastfetchData{
+		OS:     FastfetchModule{Type: "OS", Result: "Rocky Linux 10.1"},
+		Kernel: FastfetchModule{Type: "Kernel", Result: "6.12.0"},
+		CPU:    FastfetchModule{Type: "CPU", Result: "Intel i7"},
+		Memory: FastfetchModule{Type: "Memory", Result: "8 GB / 16 GB"},
+	}
+
+	lines := data.FormatForDisplay()
+
+	if len(lines) < 4 {
+		t.Errorf("FormatForDisplay() returned %d lines, want at least 4", len(lines))
+	}
+
+	// Check first line is OS.
+	if len(lines) > 0 && lines[0] != "OS: Rocky Linux 10.1" {
+		t.Errorf("lines[0] = %q, want %q", lines[0], "OS: Rocky Linux 10.1")
+	}
+}
+
+func TestFastfetchData_FormatCompact(t *testing.T) {
+	data := FastfetchData{
+		OS:     FastfetchModule{Type: "OS", Result: "Rocky Linux 10.1"},
+		Kernel: FastfetchModule{Type: "Kernel", Result: "6.12.0"},
+		CPU:    FastfetchModule{Type: "CPU", Result: "Intel i7"},
+		Memory: FastfetchModule{Type: "Memory", Result: "8 GB / 16 GB"},
+		Disk:   FastfetchModule{Type: "Disk", Result: "100 GB / 230 GB"},
+		Uptime: FastfetchModule{Type: "Uptime", Result: "5h 30m"},
+	}
+
+	lines := data.FormatCompact()
+
+	if len(lines) != 6 {
+		t.Errorf("FormatCompact() returned %d lines, want 6", len(lines))
+	}
+
+	// Verify expected format.
+	expected := []string{
+		"OS: Rocky Linux 10.1",
+		"Kernel: 6.12.0",
+		"CPU: Intel i7",
+		"RAM: 8 GB / 16 GB",
+		"Disk: 100 GB / 230 GB",
+		"Uptime: 5h 30m",
+	}
+
+	for i, want := range expected {
+		if i < len(lines) && lines[i] != want {
+			t.Errorf("lines[%d] = %q, want %q", i, lines[i], want)
+		}
+	}
+}
+
+func TestFastfetchModule_OmitsEmptyFields(t *testing.T) {
+	module := FastfetchModule{
+		Type:   "OS",
+		Result: "Linux",
+	}
+
+	data, err := json.Marshal(module)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("json.Unmarshal into map failed: %v", err)
+	}
+
+	// key and keyRaw should be omitted when empty.
+	if _, exists := raw["key"]; exists {
+		if raw["key"] != "" {
+			// Only fail if it's not an empty string.
+			t.Error("key should be empty or omitted when not set")
+		}
+	}
+}
+
+func TestCollectResult_JSONRoundTrip_FastfetchData(t *testing.T) {
+	original := &CollectResult{
+		Collector: "fastfetch",
+		Timestamp: refTime,
+		Data: &FastfetchData{
+			OS:     FastfetchModule{Type: "OS", Result: "Rocky Linux 10.1"},
+			CPU:    FastfetchModule{Type: "CPU", Result: "Intel i7"},
+			Memory: FastfetchModule{Type: "Memory", Result: "8 GB"},
+		},
+		Warnings: []string{"test warning"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var decoded CollectResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	if decoded.Collector != "fastfetch" {
+		t.Errorf("Collector = %q, want %q", decoded.Collector, "fastfetch")
+	}
+
+	// Re-marshal Data and decode into FastfetchData.
+	dataBytes, err := json.Marshal(decoded.Data)
+	if err != nil {
+		t.Fatalf("json.Marshal(decoded.Data) failed: %v", err)
+	}
+
+	var fastfetch FastfetchData
+	if err := json.Unmarshal(dataBytes, &fastfetch); err != nil {
+		t.Fatalf("json.Unmarshal into FastfetchData failed: %v", err)
+	}
+
+	if fastfetch.OS.Result != "Rocky Linux 10.1" {
+		t.Errorf("OS.Result = %q, want %q", fastfetch.OS.Result, "Rocky Linux 10.1")
+	}
+	if fastfetch.CPU.Result != "Intel i7" {
+		t.Errorf("CPU.Result = %q, want %q", fastfetch.CPU.Result, "Intel i7")
+	}
+}

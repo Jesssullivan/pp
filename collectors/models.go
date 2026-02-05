@@ -78,12 +78,107 @@ type APIRateLimits struct {
 	TokensReset       time.Time `json:"tokens_reset"`
 }
 
+// ResetSchedule holds consolidated reset times for all usage periods.
+// This provides a unified view of when each usage window will reset.
+type ResetSchedule struct {
+	// SessionResets is when the 5-hour session window resets.
+	SessionResets time.Time `json:"session_resets"`
+	// WeeklyResets is when the 7-day weekly window resets.
+	WeeklyResets time.Time `json:"weekly_resets"`
+	// MonthlyResets is when the monthly billing cycle resets (1st of next month).
+	MonthlyResets time.Time `json:"monthly_resets"`
+}
+
+// ========== Claude Usage Helper Methods ==========
+
+// GetResetSchedule returns a consolidated view of all reset times for this account.
+// For subscription accounts, it extracts times from FiveHour, SevenDay, and ExtraUsage.
+// For API accounts, it uses the RateLimits reset times.
+func (c *ClaudeAccountUsage) GetResetSchedule() *ResetSchedule {
+	schedule := &ResetSchedule{}
+
+	if c.Type == "subscription" {
+		if c.FiveHour != nil && !c.FiveHour.ResetsAt.IsZero() {
+			schedule.SessionResets = c.FiveHour.ResetsAt
+		}
+		if c.SevenDay != nil && !c.SevenDay.ResetsAt.IsZero() {
+			schedule.WeeklyResets = c.SevenDay.ResetsAt
+		}
+		// Monthly resets on the 1st of next month
+		now := time.Now()
+		schedule.MonthlyResets = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+	} else if c.Type == "api" && c.RateLimits != nil {
+		// API accounts use requests reset for session-like behavior
+		if !c.RateLimits.RequestsReset.IsZero() {
+			schedule.SessionResets = c.RateLimits.RequestsReset
+		}
+		if !c.RateLimits.TokensReset.IsZero() {
+			schedule.WeeklyResets = c.RateLimits.TokensReset
+		}
+	}
+
+	return schedule
+}
+
+// StatusColor returns a color indicator based on utilization:
+// "green" (<70%), "yellow" (70-89%), "red" (>=90%)
+func (c *ClaudeAccountUsage) StatusColor() string {
+	util := c.GetPrimaryUtilization()
+	switch {
+	case util >= 90:
+		return "red"
+	case util >= 70:
+		return "yellow"
+	default:
+		return "green"
+	}
+}
+
+// GetPrimaryUtilization returns the most relevant utilization percentage.
+// For subscriptions, this is the 5-hour window. For API, it's request utilization.
+func (c *ClaudeAccountUsage) GetPrimaryUtilization() float64 {
+	if c.Type == "subscription" {
+		if c.FiveHour != nil {
+			return c.FiveHour.Utilization
+		}
+		if c.SevenDay != nil {
+			return c.SevenDay.Utilization
+		}
+		return 0
+	}
+
+	if c.RateLimits != nil && c.RateLimits.RequestsLimit > 0 {
+		used := c.RateLimits.RequestsLimit - c.RateLimits.RequestsRemaining
+		return float64(used) / float64(c.RateLimits.RequestsLimit) * 100
+	}
+	return 0
+}
+
+// GetSecondaryUtilization returns the secondary utilization percentage.
+// For subscriptions, this is the 7-day window. For API, it's token utilization.
+func (c *ClaudeAccountUsage) GetSecondaryUtilization() float64 {
+	if c.Type == "subscription" {
+		if c.SevenDay != nil {
+			return c.SevenDay.Utilization
+		}
+		return 0
+	}
+
+	if c.RateLimits != nil && c.RateLimits.TokensLimit > 0 {
+		used := c.RateLimits.TokensLimit - c.RateLimits.TokensRemaining
+		return float64(used) / float64(c.RateLimits.TokensLimit) * 100
+	}
+	return 0
+}
+
 // ========== Billing Models ==========
 
 // BillingData aggregates billing information across cloud providers.
 type BillingData struct {
 	Providers []ProviderBilling `json:"providers"`
 	Total     BillingSummary    `json:"total"`
+	// History holds 30-day rolling spend history for sparkline display.
+	History *BillingHistory `json:"history,omitempty"`
 }
 
 // ProviderBilling holds billing data for a single cloud provider.
@@ -138,6 +233,49 @@ type BillingSummary struct {
 
 	// BudgetUSD is the total budget across all providers, if set.
 	BudgetUSD *float64 `json:"budget_usd,omitempty"`
+}
+
+// BillingHistory holds 30-day rolling spend history for sparkline visualization.
+type BillingHistory struct {
+	// ProviderHistory maps provider name to daily spend history.
+	// Each slice contains up to 30 days of spend (most recent last).
+	ProviderHistory map[string][]DailySpend `json:"provider_history"`
+
+	// TotalHistory is the aggregated daily spend across all providers.
+	TotalHistory []DailySpend `json:"total_history"`
+
+	// LastUpdated is when this history was last refreshed.
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+// DailySpend represents spend for a single day.
+type DailySpend struct {
+	// Date is the day in YYYY-MM-DD format.
+	Date string `json:"date"`
+	// SpendUSD is the spend for this day in USD.
+	SpendUSD float64 `json:"spend_usd"`
+}
+
+// ProviderBudgetConfig holds budget configuration for a single provider.
+type ProviderBudgetConfig struct {
+	// Provider identifies the cloud service.
+	Provider string `json:"provider"`
+	// MonthlyBudgetUSD is the monthly budget limit in USD.
+	MonthlyBudgetUSD float64 `json:"monthly_budget_usd"`
+	// AlertThreshold is the percentage (0-100) at which to trigger warnings.
+	AlertThreshold float64 `json:"alert_threshold"`
+}
+
+// GetSpendValues extracts the SpendUSD values from a DailySpend slice for sparkline rendering.
+func GetSpendValues(history []DailySpend) []float64 {
+	if len(history) == 0 {
+		return nil
+	}
+	values := make([]float64, len(history))
+	for i, d := range history {
+		values[i] = d.SpendUSD
+	}
+	return values
 }
 
 // ========== Infrastructure Models ==========
@@ -385,4 +523,107 @@ func (n *TailscaleNode) HasHighUtilization() bool {
 		return true
 	}
 	return false
+}
+
+// ========== Fastfetch Models ==========
+
+// FastfetchModule represents a single fastfetch output module.
+// This is a re-export for cache compatibility.
+type FastfetchModule struct {
+	Type   string `json:"type"`
+	Key    string `json:"key,omitempty"`
+	KeyRaw string `json:"keyRaw,omitempty"`
+	Result string `json:"result,omitempty"`
+}
+
+// FastfetchData holds system information collected via fastfetch.
+// This is a re-export for cache compatibility.
+type FastfetchData struct {
+	OS        FastfetchModule `json:"os"`
+	Host      FastfetchModule `json:"host"`
+	Kernel    FastfetchModule `json:"kernel"`
+	Uptime    FastfetchModule `json:"uptime"`
+	Packages  FastfetchModule `json:"packages"`
+	Shell     FastfetchModule `json:"shell"`
+	Terminal  FastfetchModule `json:"terminal"`
+	CPU       FastfetchModule `json:"cpu"`
+	GPU       FastfetchModule `json:"gpu"`
+	Memory    FastfetchModule `json:"memory"`
+	Disk      FastfetchModule `json:"disk"`
+	LocalIP   FastfetchModule `json:"localIP"`
+	Battery   FastfetchModule `json:"battery,omitempty"`
+	WM        FastfetchModule `json:"wm,omitempty"`
+	Theme     FastfetchModule `json:"theme,omitempty"`
+	Icons     FastfetchModule `json:"icons,omitempty"`
+	Font      FastfetchModule `json:"font,omitempty"`
+	Cursor    FastfetchModule `json:"cursor,omitempty"`
+	Locale    FastfetchModule `json:"locale,omitempty"`
+	DateTime  FastfetchModule `json:"dateTime,omitempty"`
+	PublicIP  FastfetchModule `json:"publicIP,omitempty"`
+	Weather   FastfetchModule `json:"weather,omitempty"`
+	Player    FastfetchModule `json:"player,omitempty"`
+	Media     FastfetchModule `json:"media,omitempty"`
+	Processes FastfetchModule `json:"processes,omitempty"`
+	Swap      FastfetchModule `json:"swap,omitempty"`
+}
+
+// IsEmpty returns true if no modules have been populated.
+func (d *FastfetchData) IsEmpty() bool {
+	return d.OS.Type == "" &&
+		d.Host.Type == "" &&
+		d.Kernel.Type == "" &&
+		d.CPU.Type == "" &&
+		d.Memory.Type == ""
+}
+
+// FormatForDisplay returns a slice of key-value pairs suitable for banner display.
+func (d *FastfetchData) FormatForDisplay() []string {
+	var lines []string
+
+	addLine := func(m FastfetchModule) {
+		if m.Type == "" || m.Result == "" {
+			return
+		}
+		key := m.Type
+		if m.Key != "" {
+			key = m.Key
+		}
+		lines = append(lines, key+": "+m.Result)
+	}
+
+	addLine(d.OS)
+	addLine(d.Host)
+	addLine(d.Kernel)
+	addLine(d.Uptime)
+	addLine(d.CPU)
+	addLine(d.GPU)
+	addLine(d.Memory)
+	addLine(d.Disk)
+	addLine(d.Packages)
+	addLine(d.Shell)
+	addLine(d.Terminal)
+	addLine(d.LocalIP)
+
+	return lines
+}
+
+// FormatCompact returns a condensed view with only essential system info.
+func (d *FastfetchData) FormatCompact() []string {
+	var lines []string
+
+	addLine := func(label, value string) {
+		if value == "" {
+			return
+		}
+		lines = append(lines, label+": "+value)
+	}
+
+	addLine("OS", d.OS.Result)
+	addLine("Kernel", d.Kernel.Result)
+	addLine("CPU", d.CPU.Result)
+	addLine("RAM", d.Memory.Result)
+	addLine("Disk", d.Disk.Result)
+	addLine("Uptime", d.Uptime.Result)
+
+	return lines
 }

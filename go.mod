@@ -14,9 +14,17 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+// Replace directives for internal packages (required for -mod=vendor builds)
+replace gitlab.com/tinyland/lab/prompt-pulse/display/layout => ./display/layout
+
+replace gitlab.com/tinyland/lab/prompt-pulse/display/render => ./display/render
+
+replace gitlab.com/tinyland/lab/prompt-pulse/tests/mocks => ./tests/mocks
+
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
+	github.com/charmbracelet/harmonica v0.2.0 // indirect
 	github.com/charmbracelet/x/ansi v0.11.5 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/clipperhouse/displaywidth v0.9.0 // indirect

@@ -16,7 +16,8 @@ import (
 
 const (
 	// usageEndpoint is the Claude OAuth usage API URL.
-	usageEndpoint = "https://api.claude.ai/api/auth/usage"
+	// Note: The correct domain is claude.ai, not api.claude.ai (which returns NXDOMAIN).
+	usageEndpoint = "https://claude.ai/api/auth/usage"
 
 	// userAgent identifies prompt-pulse in request headers.
 	userAgent = "prompt-pulse/0.1.0"

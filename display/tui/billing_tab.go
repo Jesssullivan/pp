@@ -11,7 +11,7 @@ import (
 
 // renderBillingContent renders the Billing tab content.
 // It displays a summary of total spend, forecast, and budget status,
-// followed by a per-provider table with detail links.
+// followed by a per-provider table with sparklines and detail links.
 func renderBillingContent(data *collectors.BillingData, width, height int) string {
 	if data == nil {
 		return "No billing data available"
@@ -29,15 +29,30 @@ func renderBillingContent(data *collectors.BillingData, width, height int) strin
 	sections = append(sections, titleStyle.Render("Cloud Billing"))
 	sections = append(sections, "")
 
-	// Summary section.
-	sections = append(sections, renderBillingSummary(
+	// Summary section with total budget gauge.
+	summaryLines := renderBillingSummary(
 		data.Total, spendStyle, labelStyle, overBudgetStyle, underBudgetStyle,
-	)...)
+	)
+	sections = append(sections, summaryLines...)
+
+	// Add total budget gauge if budget is set.
+	if data.Total.BudgetUSD != nil && *data.Total.BudgetUSD > 0 {
+		percent := (data.Total.CurrentMonthUSD / *data.Total.BudgetUSD) * 100
+		gauge := widgets.RenderGauge(widgets.GaugeConfig{
+			Width:            30,
+			Percent:          percent,
+			ShowPercent:      true,
+			Label:            "Budget",
+			ThresholdWarning: 70,
+			ThresholdDanger:  90,
+		})
+		sections = append(sections, gauge)
+	}
 	sections = append(sections, "")
 
-	// Provider table.
+	// Provider table with sparklines.
 	if len(data.Providers) > 0 {
-		sections = append(sections, renderProviderTable(data.Providers, width)...)
+		sections = append(sections, renderProviderTableWithSparklines(data, width)...)
 		sections = append(sections, "")
 
 		// Provider detail links and fetch times.
@@ -90,6 +105,7 @@ func renderBillingSummary(
 }
 
 // renderProviderTable renders the per-provider table using the table widget.
+// This is the original implementation without sparklines.
 func renderProviderTable(providers []collectors.ProviderBilling, width int) []string {
 	cfg := widgets.DefaultTableConfig()
 	cfg.Columns = []widgets.Column{
@@ -132,6 +148,65 @@ func renderProviderTable(providers []collectors.ProviderBilling, width int) []st
 	}
 
 	return []string{widgets.RenderTable(cfg)}
+}
+
+// renderProviderTableWithSparklines renders providers with sparkline trends and budget gauges.
+func renderProviderTableWithSparklines(data *collectors.BillingData, width int) []string {
+	var lines []string
+
+	for _, p := range data.Providers {
+		// Status indicator and text
+		statusIcon := "+"
+		statusText := ""
+		if p.Status == "error" {
+			statusIcon = "x"
+			statusText = " [error]"
+		} else if p.Status == "stale" {
+			statusIcon = "!"
+			statusText = " [stale]"
+		}
+
+		// Provider name and spend
+		line := fmt.Sprintf("  %s %-14s%s $%7.2f", statusIcon, strings.Title(p.Provider), statusText, p.CurrentMonth.SpendUSD)
+
+		// Add sparkline if history is available
+		var sparklineData []float64
+		if data.History != nil {
+			if history, ok := data.History.ProviderHistory[p.Provider]; ok && len(history) > 0 {
+				sparklineData = collectors.GetSpendValues(history)
+			}
+		}
+
+		if len(sparklineData) > 0 {
+			sparkline := widgets.RenderSparkline(widgets.SparklineConfig{
+				Data:  sparklineData,
+				Width: 15,
+				Color: colorMuted,
+			})
+			line += "  " + sparkline
+		} else {
+			// No history: show placeholder
+			line += "  " + strings.Repeat("-", 15)
+		}
+
+		// Add budget gauge if budget is set
+		if p.CurrentMonth.BudgetUSD != nil && *p.CurrentMonth.BudgetUSD > 0 {
+			percent := (p.CurrentMonth.SpendUSD / *p.CurrentMonth.BudgetUSD) * 100
+			gauge := widgets.RenderMiniGauge(percent, 12)
+			line += "  " + gauge
+		}
+
+		lines = append(lines, line)
+
+		// Add forecast line if available
+		if p.CurrentMonth.ForecastUSD != nil {
+			forecastLine := fmt.Sprintf("    forecast: $%.2f", *p.CurrentMonth.ForecastUSD)
+			forecastStyle := lipgloss.NewStyle().Foreground(colorMuted)
+			lines = append(lines, forecastStyle.Render(forecastLine))
+		}
+	}
+
+	return lines
 }
 
 // renderProviderDetails renders dashboard links and fetch timestamps for each provider.

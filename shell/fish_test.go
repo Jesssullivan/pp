@@ -26,11 +26,27 @@ func TestGenerateFishIntegration_ContainsFunctions(t *testing.T) {
 		"function pp-tui",
 		"function pp-daemon-start",
 		"function pp-daemon-stop",
+		"function pp-banner",
 	}
 	for _, fn := range functions {
 		if !strings.Contains(out, fn) {
 			t.Errorf("expected Fish output to contain %q", fn)
 		}
+	}
+}
+
+func TestGenerateFishIntegration_ContainsBannerWithSessionID(t *testing.T) {
+	cfg := DefaultIntegrationConfig()
+	out := GenerateFishIntegration(cfg)
+
+	if !strings.Contains(out, "PPULSE_SESSION_ID") {
+		t.Error("output should contain PPULSE_SESSION_ID for session-aware waifu")
+	}
+	if !strings.Contains(out, "--banner --session-id") {
+		t.Error("output should pass session-id to banner command")
+	}
+	if !strings.Contains(out, "$fish_pid") {
+		t.Error("Fish should use $fish_pid for session uniqueness")
 	}
 }
 

@@ -365,3 +365,228 @@ func KeyFromURL(url string) string {
 	h := sha256.Sum256([]byte(url))
 	return hex.EncodeToString(h[:])[:16]
 }
+
+// RenderedCacheConfig holds settings for the rendered output cache.
+type RenderedCacheConfig struct {
+	// MaxEntries is the maximum number of rendered outputs to cache in memory.
+	MaxEntries int
+	// Logger for cache operations.
+	Logger *slog.Logger
+}
+
+// DefaultRenderedCacheConfig returns sensible defaults for rendered cache.
+func DefaultRenderedCacheConfig() RenderedCacheConfig {
+	return RenderedCacheConfig{
+		MaxEntries: 50,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+// RenderedEntry holds a cached rendered output with its dimensions.
+type RenderedEntry struct {
+	// Output is the terminal escape sequence string.
+	Output string
+	// Protocol is the protocol used for rendering.
+	Protocol string
+	// Cols is the column count used for rendering.
+	Cols int
+	// Rows is the row count used for rendering.
+	Rows int
+	// CreatedAt is when the entry was created.
+	CreatedAt time.Time
+	// AccessedAt is when the entry was last accessed.
+	AccessedAt time.Time
+}
+
+// RenderedCache provides an in-memory cache for pre-rendered terminal output.
+// It caches rendered escape sequences keyed by session ID, protocol, and dimensions.
+// This avoids re-rendering the same image data for the same terminal configuration.
+type RenderedCache struct {
+	config  RenderedCacheConfig
+	entries map[string]*RenderedEntry
+	order   []string // LRU order (oldest first)
+	mu      sync.Mutex
+}
+
+// NewRenderedCache creates a RenderedCache with the given configuration.
+func NewRenderedCache(cfg RenderedCacheConfig) *RenderedCache {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if cfg.MaxEntries <= 0 {
+		cfg.MaxEntries = 50
+	}
+	return &RenderedCache{
+		config:  cfg,
+		entries: make(map[string]*RenderedEntry),
+		order:   make([]string, 0, cfg.MaxEntries),
+	}
+}
+
+// renderedCacheKey generates a cache key for rendered output.
+// Format: "{sessionID}-{protocol}-{cols}x{rows}"
+func renderedCacheKey(sessionID, protocol string, cols, rows int) string {
+	return fmt.Sprintf("%s-%s-%dx%d", sessionID, protocol, cols, rows)
+}
+
+// Get retrieves a cached rendered output. Returns (entry, exists).
+// If found, the entry's AccessedAt is updated and it's moved to the back of the LRU list.
+func (c *RenderedCache) Get(sessionID, protocol string, cols, rows int) (*RenderedEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := renderedCacheKey(sessionID, protocol, cols, rows)
+	entry, exists := c.entries[key]
+	if !exists {
+		return nil, false
+	}
+
+	// Update access time and LRU order
+	entry.AccessedAt = time.Now()
+	c.moveToBack(key)
+
+	c.config.Logger.Debug("rendered cache hit",
+		slog.String("session", sessionID),
+		slog.String("protocol", protocol),
+		slog.Int("cols", cols),
+		slog.Int("rows", rows),
+	)
+
+	return entry, true
+}
+
+// Put stores a rendered output in the cache.
+// If the cache is full, the least recently used entry is evicted.
+func (c *RenderedCache) Put(sessionID, protocol string, cols, rows int, output string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := renderedCacheKey(sessionID, protocol, cols, rows)
+	now := time.Now()
+
+	// Check if entry already exists
+	if existing, exists := c.entries[key]; exists {
+		existing.Output = output
+		existing.AccessedAt = now
+		c.moveToBack(key)
+		return
+	}
+
+	// Evict oldest if at capacity
+	if len(c.entries) >= c.config.MaxEntries && len(c.order) > 0 {
+		oldestKey := c.order[0]
+		c.order = c.order[1:]
+		delete(c.entries, oldestKey)
+		c.config.Logger.Debug("rendered cache eviction", slog.String("key", oldestKey))
+	}
+
+	// Add new entry
+	c.entries[key] = &RenderedEntry{
+		Output:     output,
+		Protocol:   protocol,
+		Cols:       cols,
+		Rows:       rows,
+		CreatedAt:  now,
+		AccessedAt: now,
+	}
+	c.order = append(c.order, key)
+
+	c.config.Logger.Debug("rendered cache put",
+		slog.String("session", sessionID),
+		slog.String("protocol", protocol),
+		slog.Int("cols", cols),
+		slog.Int("rows", rows),
+		slog.Int("output_len", len(output)),
+	)
+}
+
+// Has reports whether a rendered output exists in the cache.
+func (c *RenderedCache) Has(sessionID, protocol string, cols, rows int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := renderedCacheKey(sessionID, protocol, cols, rows)
+	_, exists := c.entries[key]
+	return exists
+}
+
+// Invalidate removes a specific rendered output from the cache.
+func (c *RenderedCache) Invalidate(sessionID, protocol string, cols, rows int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := renderedCacheKey(sessionID, protocol, cols, rows)
+	c.removeKey(key)
+}
+
+// InvalidateSession removes all rendered outputs for a session.
+func (c *RenderedCache) InvalidateSession(sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	prefix := sessionID + "-"
+	keysToRemove := make([]string, 0)
+
+	for key := range c.entries {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			keysToRemove = append(keysToRemove, key)
+		}
+	}
+
+	for _, key := range keysToRemove {
+		c.removeKey(key)
+	}
+
+	c.config.Logger.Debug("rendered cache session invalidated",
+		slog.String("session", sessionID),
+		slog.Int("removed", len(keysToRemove)),
+	)
+}
+
+// Clear removes all entries from the cache.
+func (c *RenderedCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries = make(map[string]*RenderedEntry)
+	c.order = make([]string, 0, c.config.MaxEntries)
+}
+
+// Stats returns statistics about the rendered cache.
+func (c *RenderedCache) Stats() (entryCount int, totalBytes int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entryCount = len(c.entries)
+	for _, entry := range c.entries {
+		totalBytes += int64(len(entry.Output))
+	}
+	return entryCount, totalBytes
+}
+
+// moveToBack moves a key to the back of the LRU order list.
+// Must be called with c.mu held.
+func (c *RenderedCache) moveToBack(key string) {
+	// Find and remove key from current position
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+	// Add to back
+	c.order = append(c.order, key)
+}
+
+// removeKey removes a key from the cache.
+// Must be called with c.mu held.
+func (c *RenderedCache) removeKey(key string) {
+	delete(c.entries, key)
+	// Remove from order list
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}

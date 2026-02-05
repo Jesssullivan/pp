@@ -37,9 +37,11 @@ pp-daemon-stop() {
     pkill -f "%[1]s --daemon"
 }
 
-# Display system status banner
+# Display system status banner with session-aware waifu
+# Each shell session gets its own unique waifu image via PPULSE_SESSION_ID
 pp-banner() {
-    %[1]s --banner
+    export PPULSE_SESSION_ID="${PPULSE_SESSION_ID:-$$-$(date +%%s)}"
+    %[1]s --banner --session-id "$PPULSE_SESSION_ID"
 }
 `, cfg.BinaryPath, cfg.TUIKeybinding)
 }

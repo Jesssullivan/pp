@@ -21,11 +21,23 @@ func TestGenerateZshIntegration_ContainsFunctions(t *testing.T) {
 	cfg := DefaultIntegrationConfig()
 	output := GenerateZshIntegration(cfg)
 
-	functions := []string{"pp-status", "pp-tui", "pp-daemon-start", "pp-daemon-stop"}
+	functions := []string{"pp-status", "pp-tui", "pp-daemon-start", "pp-daemon-stop", "pp-banner"}
 	for _, fn := range functions {
 		if !strings.Contains(output, fn+"()") {
 			t.Errorf("output should contain function %s()", fn)
 		}
+	}
+}
+
+func TestGenerateZshIntegration_ContainsBannerWithSessionID(t *testing.T) {
+	cfg := DefaultIntegrationConfig()
+	output := GenerateZshIntegration(cfg)
+
+	if !strings.Contains(output, "PPULSE_SESSION_ID") {
+		t.Error("output should contain PPULSE_SESSION_ID for session-aware waifu")
+	}
+	if !strings.Contains(output, "--banner --session-id") {
+		t.Error("output should pass session-id to banner command")
 	}
 }
 

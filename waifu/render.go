@@ -9,9 +9,21 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/disintegration/imaging"
+	"gitlab.com/tinyland/lab/prompt-pulse/display/render"
 )
+
+// timeNow returns the current time. Wrapped for testing.
+func timeNow() time.Time {
+	return time.Now()
+}
+
+// timeSinceMs returns milliseconds since the given time.
+func timeSinceMs(start time.Time) int64 {
+	return time.Since(start).Milliseconds()
+}
 
 // RenderProtocol identifies which image rendering protocol to use.
 type RenderProtocol int
@@ -218,4 +230,307 @@ func renderChafa(imageData []byte, cols, rows int) (string, error) {
 func colorToRGBA(c color.Color) (r, g, b, a uint8) {
 	r32, g32, b32, a32 := c.RGBA()
 	return uint8(r32 >> 8), uint8(g32 >> 8), uint8(b32 >> 8), uint8(a32 >> 8)
+}
+
+// --- Modular Render Package Integration ---
+// The following functions bridge to the new display/render package which provides
+// enhanced protocol detection including iTerm2 and Sixel support.
+
+// DetectImageProtocol returns the auto-detected image rendering protocol.
+// This uses the new modular render package with enhanced detection.
+func DetectImageProtocol() string {
+	return render.DetectProtocol().String()
+}
+
+// DetectImageProtocolWithContext returns the protocol considering SSH/tmux degradation.
+func DetectImageProtocolWithContext() string {
+	return render.DetectProtocolWithContext().String()
+}
+
+// GetRenderDiagnostics returns diagnostic information about the rendering environment.
+func GetRenderDiagnostics() string {
+	return render.FormatDiagnostics()
+}
+
+// RenderImageModular renders image data using the new modular render package.
+// This provides access to all supported protocols: Kitty, iTerm2, Sixel, Chafa, Unicode.
+func RenderImageModular(imageData []byte, cols, rows int) (string, error) {
+	return render.DetectAndRender(imageData, cols, rows)
+}
+
+// RenderImageWithProtocol renders using a specific protocol from the modular package.
+// Supported protocols: "kitty", "iterm2", "sixel", "chafa", "unicode", "none".
+func RenderImageWithProtocol(imageData []byte, protocol string, cols, rows int) (string, error) {
+	var p render.ImageProtocol
+	switch strings.ToLower(protocol) {
+	case "kitty":
+		p = render.ProtocolKitty
+	case "iterm2", "iterm":
+		p = render.ProtocolITerm2
+	case "sixel":
+		p = render.ProtocolSixel
+	case "chafa":
+		p = render.ProtocolChafa
+	case "unicode":
+		p = render.ProtocolUnicode
+	default:
+		p = render.ProtocolNone
+	}
+
+	cfg := render.Config{
+		Protocol:        p,
+		MaxCols:         cols,
+		MaxRows:         rows,
+		FallbackEnabled: false, // Don't fallback when specific protocol is requested
+	}
+	return render.Render(imageData, cfg)
+}
+
+// IsChafaAvailable returns true if the chafa CLI is installed.
+func IsChafaAvailable() bool {
+	return render.IsChafaAvailable()
+}
+
+// GetChafaVersion returns the installed chafa version, or empty string if not found.
+func GetChafaVersion() string {
+	return render.GetChafaVersion()
+}
+
+// ErrCorruptImage is returned when image data cannot be decoded.
+var ErrCorruptImage = fmt.Errorf("corrupt or unreadable image data")
+
+// OptimizedRenderConfig controls the optimized renderer behavior.
+type OptimizedRenderConfig struct {
+	// MaxCols is the maximum terminal columns for the image.
+	MaxCols int
+	// MaxRows is the maximum terminal rows for the image.
+	MaxRows int
+	// FallbackEnabled enables the protocol fallback chain.
+	FallbackEnabled bool
+	// MaxCacheEntries is the maximum number of rendered outputs to cache.
+	MaxCacheEntries int
+}
+
+// DefaultOptimizedRenderConfig returns sensible defaults.
+func DefaultOptimizedRenderConfig() OptimizedRenderConfig {
+	return OptimizedRenderConfig{
+		MaxCols:         40,
+		MaxRows:         20,
+		FallbackEnabled: true,
+		MaxCacheEntries: 50,
+	}
+}
+
+// OptimizedRenderer provides high-performance image rendering with caching.
+// It combines the fallback chain pattern with rendered output caching
+// to achieve <100ms render times from cache.
+type OptimizedRenderer struct {
+	// renderedCache caches terminal escape sequences
+	renderedCache *RenderedCache
+	// config holds rendering configuration
+	config OptimizedRenderConfig
+}
+
+// NewOptimizedRenderer creates an OptimizedRenderer with the given configuration.
+func NewOptimizedRenderer(cfg OptimizedRenderConfig) *OptimizedRenderer {
+	renderedCacheCfg := DefaultRenderedCacheConfig()
+	renderedCacheCfg.MaxEntries = cfg.MaxCacheEntries
+
+	return &OptimizedRenderer{
+		renderedCache: NewRenderedCache(renderedCacheCfg),
+		config:        cfg,
+	}
+}
+
+// RenderOutput holds the result of an optimized render operation.
+type RenderOutput struct {
+	// Output is the terminal escape sequence string.
+	Output string
+	// Protocol is the protocol that was used.
+	Protocol string
+	// FromCache indicates if the result was served from the rendered cache.
+	FromCache bool
+	// RenderTimeMs is the rendering time in milliseconds.
+	RenderTimeMs int64
+}
+
+// Render renders image data using the optimized fallback chain with caching.
+// It first checks the rendered cache for a matching entry, then falls back
+// to actual rendering if not cached.
+func (r *OptimizedRenderer) Render(sessionID string, imageData []byte, cols, rows int) (RenderOutput, error) {
+	start := timeNow()
+
+	// Detect protocol for cache key
+	protocol := DetectProtocol()
+	protocolStr := protocolToString(protocol)
+
+	// Check rendered cache first
+	if cached, exists := r.renderedCache.Get(sessionID, protocolStr, cols, rows); exists {
+		return RenderOutput{
+			Output:       cached.Output,
+			Protocol:     cached.Protocol,
+			FromCache:    true,
+			RenderTimeMs: timeSinceMs(start),
+		}, nil
+	}
+
+	// Not in cache, perform actual rendering with fallback chain
+	output, usedProtocol, err := r.renderWithFallback(imageData, cols, rows)
+	if err != nil {
+		return RenderOutput{}, fmt.Errorf("optimized render failed: %w", err)
+	}
+
+	// Cache the result
+	r.renderedCache.Put(sessionID, usedProtocol, cols, rows, output)
+
+	return RenderOutput{
+		Output:       output,
+		Protocol:     usedProtocol,
+		FromCache:    false,
+		RenderTimeMs: timeSinceMs(start),
+	}, nil
+}
+
+// renderWithFallback implements the fallback chain pattern.
+// Fallback order:
+//  1. chafa CLI (if available) - handles all protocols automatically
+//  2. Detected native protocol (Kitty or Unicode)
+//  3. Unicode half-blocks (always works)
+func (r *OptimizedRenderer) renderWithFallback(imageData []byte, cols, rows int) (string, string, error) {
+	if len(imageData) == 0 {
+		return "", "", ErrCorruptImage
+	}
+
+	// Validate image can be decoded
+	if _, _, err := DecodeImage(imageData); err != nil {
+		return "", "", ErrCorruptImage
+	}
+
+	// Try 1: chafa (handles multiple protocols automatically)
+	if output, err := renderChafa(imageData, cols, rows); err == nil {
+		return output, "chafa", nil
+	}
+
+	// Try 2: Native protocol based on detection
+	protocol := DetectProtocol()
+	switch protocol {
+	case ProtocolKitty:
+		if output, err := renderKitty(imageData, cols, rows); err == nil {
+			return output, "kitty", nil
+		}
+	}
+
+	// Try 3: Unicode half-blocks (always works)
+	output, err := renderUnicode(imageData, cols, rows)
+	if err != nil {
+		return "", "", fmt.Errorf("all render protocols failed: %w", err)
+	}
+
+	return output, "unicode", nil
+}
+
+// RenderWithoutCache renders image data without using the cache.
+// Useful for one-off renders or testing.
+func (r *OptimizedRenderer) RenderWithoutCache(imageData []byte, cols, rows int) (RenderOutput, error) {
+	start := timeNow()
+
+	output, protocol, err := r.renderWithFallback(imageData, cols, rows)
+	if err != nil {
+		return RenderOutput{}, err
+	}
+
+	return RenderOutput{
+		Output:       output,
+		Protocol:     protocol,
+		FromCache:    false,
+		RenderTimeMs: timeSinceMs(start),
+	}, nil
+}
+
+// InvalidateCache clears the rendered cache for a specific session.
+func (r *OptimizedRenderer) InvalidateCache(sessionID string) {
+	r.renderedCache.InvalidateSession(sessionID)
+}
+
+// ClearCache clears all cached rendered outputs.
+func (r *OptimizedRenderer) ClearCache() {
+	r.renderedCache.Clear()
+}
+
+// CacheStats returns statistics about the rendered cache.
+func (r *OptimizedRenderer) CacheStats() (entryCount int, totalBytes int64) {
+	return r.renderedCache.Stats()
+}
+
+// protocolToString converts a RenderProtocol to a string.
+func protocolToString(p RenderProtocol) string {
+	switch p {
+	case ProtocolKitty:
+		return "kitty"
+	case ProtocolUnicode:
+		return "unicode"
+	case ProtocolNone:
+		return "none"
+	default:
+		return "unknown"
+	}
+}
+
+// RenderImageWithFallback renders an image using the fallback chain.
+// This is a convenience function for one-off renders.
+//
+// Fallback order:
+//  1. chafa CLI (if available)
+//  2. Detected native protocol
+//  3. Unicode half-blocks (always works)
+func RenderImageWithFallback(imageData []byte, cols, rows int) (string, error) {
+	r := NewOptimizedRenderer(OptimizedRenderConfig{
+		MaxCols:         cols,
+		MaxRows:         rows,
+		FallbackEnabled: true,
+		MaxCacheEntries: 1, // Minimal cache for one-off
+	})
+
+	result, err := r.RenderWithoutCache(imageData, cols, rows)
+	if err != nil {
+		return "", err
+	}
+
+	return result.Output, nil
+}
+
+// RenderImageCached renders an image using the specified cache for rendered outputs.
+// It first checks the cache, then falls back to actual rendering.
+//
+// Parameters:
+//   - cache: The rendered output cache
+//   - sessionID: Unique identifier for the current session/image
+//   - imageData: Raw image bytes (PNG, JPEG, GIF)
+//   - cols, rows: Terminal dimensions for rendering
+//
+// Returns the rendered output string and any error.
+func RenderImageCached(cache *RenderedCache, sessionID string, imageData []byte, cols, rows int) (string, error) {
+	if len(imageData) == 0 {
+		return "", ErrCorruptImage
+	}
+
+	// Detect protocol for cache key
+	protocol := DetectProtocol()
+	protocolStr := protocolToString(protocol)
+
+	// Check cache first
+	if cached, exists := cache.Get(sessionID, protocolStr, cols, rows); exists {
+		return cached.Output, nil
+	}
+
+	// Render with fallback
+	output, err := RenderImageWithFallback(imageData, cols, rows)
+	if err != nil {
+		return "", err
+	}
+
+	// Cache the result
+	cache.Put(sessionID, protocolStr, cols, rows, output)
+
+	return output, nil
 }

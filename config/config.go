@@ -138,6 +138,14 @@ type DisplayConfig struct {
 	EnableHyperlinks bool `yaml:"enable_hyperlinks"`
 	// Waifu holds waifu image display settings.
 	Waifu WaifuConfig `yaml:"waifu"`
+	// Fastfetch holds fastfetch system info display settings.
+	Fastfetch FastfetchConfig `yaml:"fastfetch"`
+}
+
+// FastfetchConfig holds fastfetch system info display settings.
+type FastfetchConfig struct {
+	// Enabled controls whether fastfetch system info is displayed in the banner.
+	Enabled bool `yaml:"enabled"`
 }
 
 // WaifuConfig holds waifu image display settings.
@@ -150,6 +158,10 @@ type WaifuConfig struct {
 	CacheTTL string `yaml:"cache_ttl"`
 	// MaxCacheMB is the maximum cache size in megabytes.
 	MaxCacheMB int `yaml:"max_cache_mb"`
+	// MaxSessions is the maximum number of session-specific waifu images to keep.
+	// LRU eviction removes the oldest sessions when this limit is exceeded.
+	// Default: 10.
+	MaxSessions int `yaml:"max_sessions"`
 }
 
 // StarshipConfig holds starship prompt module toggles.
@@ -218,10 +230,14 @@ func DefaultConfig() *Config {
 			Theme:            "monitoring",
 			EnableHyperlinks: true,
 			Waifu: WaifuConfig{
-				Enabled:    false,
-				Category:   "neko",
-				CacheTTL:   "24h",
-				MaxCacheMB: 50,
+				Enabled:     false,
+				Category:    "neko",
+				CacheTTL:    "24h",
+				MaxCacheMB:  50,
+				MaxSessions: 10,
+			},
+			Fastfetch: FastfetchConfig{
+				Enabled: false,
 			},
 		},
 		Starship: StarshipConfig{

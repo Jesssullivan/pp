@@ -14,7 +14,10 @@
 //	-daemon           Run background polling daemon
 //	-tui              Launch interactive Bubbletea TUI
 //	-starship string  Output one-line Starship format (claude|billing|infra)
+//	-shell string     Output shell integration script (bash|zsh|fish|nushell)
 //	-config string    Path to configuration file (default: ~/.config/prompt-pulse/config.yaml)
+//	-use-mocks        Use mock data instead of real API calls (for testing)
+//	-mock-accounts int Number of mock Claude accounts to generate (default: 3)
 //	-verbose          Enable verbose logging
 //	-version          Print version and exit
 package main
@@ -39,6 +42,8 @@ import (
 	"gitlab.com/tinyland/lab/prompt-pulse/display/banner"
 	"gitlab.com/tinyland/lab/prompt-pulse/display/starship"
 	"gitlab.com/tinyland/lab/prompt-pulse/display/tui"
+	"gitlab.com/tinyland/lab/prompt-pulse/shell"
+	"gitlab.com/tinyland/lab/prompt-pulse/tests/mocks"
 )
 
 var (
@@ -54,19 +59,46 @@ const defaultPollInterval = 15 * time.Minute
 func main() {
 	// Parse command line flags
 	var (
-		configPath  = flag.String("config", "", "Path to configuration file")
-		runDaemon   = flag.Bool("daemon", false, "Run background polling daemon")
-		runTUI      = flag.Bool("tui", false, "Launch interactive Bubbletea TUI")
-		runBanner   = flag.Bool("banner", false, "Display system status banner")
-		showWaifu   = flag.Bool("waifu", false, "Show waifu image in banner (requires -banner)")
-		starshipMod = flag.String("starship", "", "Output one-line Starship format (claude|billing|infra)")
-		verbose     = flag.Bool("verbose", false, "Enable verbose logging")
-		showVersion = flag.Bool("version", false, "Print version and exit")
+		configPath      = flag.String("config", "", "Path to configuration file")
+		runDaemon       = flag.Bool("daemon", false, "Run background polling daemon")
+		runTUI          = flag.Bool("tui", false, "Launch interactive Bubbletea TUI")
+		runBanner       = flag.Bool("banner", false, "Display system status banner")
+		showWaifu       = flag.Bool("waifu", false, "Show waifu image in banner (requires -banner)")
+		showFastfetch   = flag.Bool("fastfetch-enabled", false, "Show fastfetch system info in banner center column")
+		sessionID       = flag.String("session-id", "", "Session ID for waifu caching (auto-generated if empty)")
+		starshipMod     = flag.String("starship", "", "Output one-line Starship format (claude|billing|infra)")
+		shellIntegration = flag.String("shell", "", "Output shell integration script (bash|zsh|fish|nushell)")
+		useMocks         = flag.Bool("use-mocks", false, "Use mock data instead of real API calls (for testing)")
+		mockAccounts     = flag.Int("mock-accounts", 3, "Number of mock Claude accounts to generate (with -use-mocks)")
+		mockSeed         = flag.Int64("mock-seed", 0, "Random seed for mock data (0 = random)")
+		verbose          = flag.Bool("verbose", false, "Enable verbose logging")
+		showVersion      = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("prompt-pulse %s (%s) built %s\n", version, commit, date)
+		os.Exit(0)
+	}
+
+	// Handle shell integration output (doesn't require config)
+	if *shellIntegration != "" {
+		cfg := shell.DefaultIntegrationConfig()
+		var shellType shell.ShellType
+		switch *shellIntegration {
+		case "bash":
+			shellType = shell.Bash
+		case "zsh":
+			shellType = shell.Zsh
+		case "fish":
+			shellType = shell.Fish
+		case "nushell", "nu":
+			shellType = shell.Nushell
+		default:
+			fmt.Fprintf(os.Stderr, "unknown shell: %s (supported: bash, zsh, fish, nushell)\n", *shellIntegration)
+			os.Exit(1)
+		}
+		fmt.Print(shell.GenerateIntegration(shellType, cfg))
 		os.Exit(0)
 	}
 
@@ -131,21 +163,32 @@ func main() {
 	case *runTUI:
 		model := tui.NewModel()
 
-		// Load cached data to populate the model before launch.
-		store, storeErr := cache.NewStore(cfg.Daemon.CacheDir, logger)
-		if storeErr == nil {
-			ttl := parseDuration(cfg.Daemon.PollInterval)
-			if claude, _, _ := cache.GetTyped[collectors.ClaudeUsage](store, "claude", ttl); claude != nil {
-				model.SetClaudeData(claude)
+		if *useMocks {
+			// Use mock data for testing
+			if *mockSeed != 0 {
+				mocks.SeedRandom(*mockSeed)
 			}
-			if billing, _, _ := cache.GetTyped[collectors.BillingData](store, "billing", ttl); billing != nil {
-				model.SetBillingData(billing)
-			}
-			if infra, _, _ := cache.GetTyped[collectors.InfraStatus](store, "infra", ttl); infra != nil {
-				model.SetInfraData(infra)
-			}
+			logger.Info("using mock data", "accounts", *mockAccounts, "seed", *mockSeed)
+			model.SetClaudeData(mocks.MockClaudeUsage(*mockAccounts))
+			model.SetBillingData(mocks.MockBillingData())
+			model.SetInfraData(mocks.MockInfraStatus())
 		} else {
-			logger.Warn("failed to open cache for TUI", "error", storeErr)
+			// Load cached data to populate the model before launch.
+			store, storeErr := cache.NewStore(cfg.Daemon.CacheDir, logger)
+			if storeErr == nil {
+				ttl := parseDuration(cfg.Daemon.PollInterval)
+				if claude, _, _ := cache.GetTyped[collectors.ClaudeUsage](store, "claude", ttl); claude != nil {
+					model.SetClaudeData(claude)
+				}
+				if billing, _, _ := cache.GetTyped[collectors.BillingData](store, "billing", ttl); billing != nil {
+					model.SetBillingData(billing)
+				}
+				if infra, _, _ := cache.GetTyped[collectors.InfraStatus](store, "infra", ttl); infra != nil {
+					model.SetInfraData(infra)
+				}
+			} else {
+				logger.Warn("failed to open cache for TUI", "error", storeErr)
+			}
 		}
 
 		p := tea.NewProgram(model, tea.WithAltScreen())
@@ -174,23 +217,43 @@ func main() {
 		}
 
 	case *runBanner:
-		// --waifu flag overrides config file setting
+		// --waifu and --fastfetch-enabled flags override config file settings
 		waifuEnabled := cfg.Display.Waifu.Enabled || *showWaifu
+		fastfetchEnabled := cfg.Display.Fastfetch.Enabled || *showFastfetch
 		termWidth, termHeight := banner.DetectTerminalSize()
-		bannerCfg := banner.BannerConfig{
-			CacheDir:        cfg.Daemon.CacheDir,
-			CacheTTL:        parseDuration(cfg.Daemon.PollInterval),
-			WaifuEnabled:    waifuEnabled,
-			WaifuCategory:   cfg.Display.Waifu.Category,
-			WaifuCacheDir:   filepath.Join(cfg.Daemon.CacheDir, "waifu"),
-			WaifuCacheTTL:   parseDuration(cfg.Display.Waifu.CacheTTL),
-			WaifuMaxCacheMB: cfg.Display.Waifu.MaxCacheMB,
-			TermWidth:       termWidth,
-			TermHeight:      termHeight,
-			Logger:          logger,
+		// Use default max sessions if not configured
+		maxSessions := cfg.Display.Waifu.MaxSessions
+		if maxSessions <= 0 {
+			maxSessions = 10
 		}
-		b := banner.NewBanner(bannerCfg)
-		output, err := b.Generate(ctx)
+		bannerCfg := banner.BannerConfig{
+			CacheDir:         cfg.Daemon.CacheDir,
+			CacheTTL:         parseDuration(cfg.Daemon.PollInterval),
+			WaifuEnabled:     waifuEnabled,
+			WaifuCategory:    cfg.Display.Waifu.Category,
+			WaifuCacheDir:    filepath.Join(cfg.Daemon.CacheDir, "waifu"),
+			WaifuCacheTTL:    parseDuration(cfg.Display.Waifu.CacheTTL),
+			WaifuMaxCacheMB:  cfg.Display.Waifu.MaxCacheMB,
+			WaifuSessionID:   *sessionID,
+			WaifuMaxSessions: maxSessions,
+			FastfetchEnabled: fastfetchEnabled,
+			TermWidth:        termWidth,
+			TermHeight:       termHeight,
+			Logger:           logger,
+		}
+
+		var output string
+		if *useMocks {
+			// Use mock data for testing
+			if *mockSeed != 0 {
+				mocks.SeedRandom(*mockSeed)
+			}
+			logger.Info("using mock data for banner", "accounts", *mockAccounts, "seed", *mockSeed)
+			output, err = generateMockBanner(ctx, bannerCfg, *mockAccounts)
+		} else {
+			b := banner.NewBanner(bannerCfg)
+			output, err = b.Generate(ctx)
+		}
 		if err != nil {
 			logger.Error("banner generation failed", "error", err)
 			os.Exit(1)
@@ -242,4 +305,16 @@ func parseDuration(s string) time.Duration {
 func ensureLogDir(logFile string) error {
 	dir := filepath.Dir(logFile)
 	return os.MkdirAll(dir, 0755)
+}
+
+// generateMockBanner generates a banner using mock data instead of cached data.
+// This is useful for testing display layouts with various data configurations.
+func generateMockBanner(ctx context.Context, cfg banner.BannerConfig, accountCount int) (string, error) {
+	claude := mocks.MockClaudeUsage(accountCount)
+	billing := mocks.MockBillingData()
+	infra := mocks.MockInfraStatus()
+
+	// Create a mock banner with injected data
+	b := banner.NewMockBanner(cfg, claude, billing, infra)
+	return b.Generate(ctx)
 }

@@ -330,3 +330,259 @@ func TestDefaultRenderConfig(t *testing.T) {
 		t.Error("Writer should default to os.Stdout, got nil")
 	}
 }
+
+// --- OptimizedRenderer tests ---
+
+func TestOptimizedRenderer_Render_CacheHit(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+	sessionID := "test-session"
+
+	// First render - cache miss
+	result1, err := r.Render(sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("First render failed: %v", err)
+	}
+	if result1.FromCache {
+		t.Error("First render should not be from cache")
+	}
+	if result1.Output == "" {
+		t.Error("Expected non-empty output")
+	}
+
+	// Second render - cache hit
+	result2, err := r.Render(sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("Second render failed: %v", err)
+	}
+	if !result2.FromCache {
+		t.Error("Second render should be from cache")
+	}
+	if result2.Output != result1.Output {
+		t.Error("Cached output should match original")
+	}
+}
+
+func TestOptimizedRenderer_Render_DifferentDimensions(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+	sessionID := "test-session"
+
+	// Render at 20x10
+	result1, err := r.Render(sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("20x10 render failed: %v", err)
+	}
+
+	// Render at 40x20 - should NOT be from cache
+	result2, err := r.Render(sessionID, data, 40, 20)
+	if err != nil {
+		t.Fatalf("40x20 render failed: %v", err)
+	}
+	if result2.FromCache {
+		t.Error("Different dimensions should not hit cache")
+	}
+
+	// Output may or may not differ depending on protocol and scaling
+	// The key point is that different dimensions don't share cache entries
+	// If both render successfully and cache doesn't share entries, we're good
+	if result1.Output == "" || result2.Output == "" {
+		t.Error("Both renders should produce non-empty output")
+	}
+}
+
+func TestOptimizedRenderer_RenderWithoutCache(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+
+	result, err := r.RenderWithoutCache(data, 20, 10)
+	if err != nil {
+		t.Fatalf("RenderWithoutCache failed: %v", err)
+	}
+	if result.FromCache {
+		t.Error("RenderWithoutCache should never return cached result")
+	}
+	if result.Output == "" {
+		t.Error("Expected non-empty output")
+	}
+
+	// Verify nothing was cached
+	count, _ := r.CacheStats()
+	if count != 0 {
+		t.Errorf("Cache should be empty, has %d entries", count)
+	}
+}
+
+func TestOptimizedRenderer_InvalidateCache(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+	sessionID := "test-session"
+
+	// Populate cache
+	_, err := r.Render(sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("Initial render failed: %v", err)
+	}
+
+	// Verify cache has entry
+	count, _ := r.CacheStats()
+	if count == 0 {
+		t.Fatal("Cache should have entry")
+	}
+
+	// Invalidate
+	r.InvalidateCache(sessionID)
+
+	// Render again - should not be from cache
+	result, err := r.Render(sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("Render after invalidation failed: %v", err)
+	}
+	if result.FromCache {
+		t.Error("Render after invalidation should not be from cache")
+	}
+}
+
+func TestOptimizedRenderer_ClearCache(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+
+	// Populate cache with multiple sessions
+	r.Render("session1", data, 20, 10)
+	r.Render("session2", data, 20, 10)
+
+	count, _ := r.CacheStats()
+	if count < 2 {
+		t.Fatalf("Expected at least 2 cache entries, got %d", count)
+	}
+
+	// Clear
+	r.ClearCache()
+
+	count, _ = r.CacheStats()
+	if count != 0 {
+		t.Errorf("Cache should be empty after clear, has %d entries", count)
+	}
+}
+
+func TestOptimizedRenderer_CorruptImage(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	_, err := r.Render("session", []byte("not an image"), 20, 10)
+	if err == nil {
+		t.Error("Expected error for corrupt image data")
+	}
+}
+
+func TestOptimizedRenderer_EmptyImage(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+	r := NewOptimizedRenderer(cfg)
+
+	_, err := r.Render("session", []byte{}, 20, 10)
+	if err == nil {
+		t.Error("Expected error for empty image data")
+	}
+}
+
+func TestRenderImageWithFallback(t *testing.T) {
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+
+	output, err := RenderImageWithFallback(data, 20, 10)
+	if err != nil {
+		t.Fatalf("RenderImageWithFallback failed: %v", err)
+	}
+	if output == "" {
+		t.Error("Expected non-empty output")
+	}
+}
+
+func TestRenderImageWithFallback_CorruptData(t *testing.T) {
+	_, err := RenderImageWithFallback([]byte("not an image"), 20, 10)
+	if err == nil {
+		t.Error("Expected error for corrupt data")
+	}
+}
+
+func TestRenderImageWithFallback_EmptyData(t *testing.T) {
+	_, err := RenderImageWithFallback([]byte{}, 20, 10)
+	if err == nil {
+		t.Error("Expected error for empty data")
+	}
+}
+
+func TestRenderImageCached(t *testing.T) {
+	cache := NewRenderedCache(DefaultRenderedCacheConfig())
+	data := makePNG(4, 4, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+	sessionID := "test-session"
+
+	// First call - cache miss
+	output1, err := RenderImageCached(cache, sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("First RenderImageCached failed: %v", err)
+	}
+	if output1 == "" {
+		t.Error("Expected non-empty output")
+	}
+
+	// Verify entry was cached
+	count, _ := cache.Stats()
+	if count == 0 {
+		t.Error("Expected cache entry")
+	}
+
+	// Second call - cache hit
+	output2, err := RenderImageCached(cache, sessionID, data, 20, 10)
+	if err != nil {
+		t.Fatalf("Second RenderImageCached failed: %v", err)
+	}
+	if output2 != output1 {
+		t.Error("Cached output should match original")
+	}
+}
+
+func TestProtocolToString(t *testing.T) {
+	tests := []struct {
+		protocol RenderProtocol
+		want     string
+	}{
+		{ProtocolKitty, "kitty"},
+		{ProtocolUnicode, "unicode"},
+		{ProtocolNone, "none"},
+		{RenderProtocol(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		got := protocolToString(tt.protocol)
+		if got != tt.want {
+			t.Errorf("protocolToString(%d) = %q, want %q", tt.protocol, got, tt.want)
+		}
+	}
+}
+
+func TestDefaultOptimizedRenderConfig(t *testing.T) {
+	cfg := DefaultOptimizedRenderConfig()
+
+	if cfg.MaxCols != 40 {
+		t.Errorf("MaxCols = %d, want 40", cfg.MaxCols)
+	}
+	if cfg.MaxRows != 20 {
+		t.Errorf("MaxRows = %d, want 20", cfg.MaxRows)
+	}
+	if !cfg.FallbackEnabled {
+		t.Error("FallbackEnabled should default to true")
+	}
+	if cfg.MaxCacheEntries != 50 {
+		t.Errorf("MaxCacheEntries = %d, want 50", cfg.MaxCacheEntries)
+	}
+}

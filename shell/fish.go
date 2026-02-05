@@ -38,6 +38,15 @@ function pp-daemon-stop -d "Stop prompt-pulse daemon"
     pkill -f "%s --daemon"
 end
 
+# Display system status banner with session-aware waifu
+# Each shell session gets its own unique waifu image via PPULSE_SESSION_ID
+function pp-banner -d "Display system status banner"
+    if not set -q PPULSE_SESSION_ID
+        set -gx PPULSE_SESSION_ID "$fish_pid-(date +%%s)"
+    end
+    %s --banner --session-id "$PPULSE_SESSION_ID"
+end
+
 # Completions
 complete -c %s -l tui -d "Launch interactive TUI"
 complete -c %s -l daemon -d "Run background daemon"
@@ -47,6 +56,7 @@ complete -c %s -l version -d "Show version"
 complete -c %s -l verbose -d "Verbose logging"
 `,
 		cfg.TUIKeybinding,
+		cfg.BinaryPath,
 		cfg.BinaryPath,
 		cfg.BinaryPath,
 		cfg.BinaryPath,

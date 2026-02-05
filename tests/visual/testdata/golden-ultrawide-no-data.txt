@@ -1,0 +1,5 @@
+Claude                   │ Infrastructure                                     │ Trends
+  (no data)              │   (no data)                                        │   CPU: [sparkline]
+                         │                                                    │   MEM: [sparkline]
+Billing                  │                                                    │   NET: [sparkline]
+  (no data)              │                                                    │ 

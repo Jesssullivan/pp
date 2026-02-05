@@ -305,33 +305,58 @@ func (c *ClaudeCollector) collectSubscription(ctx context.Context, acct AccountC
 	// Create the OAuth client and fetch usage.
 	fetcher := newUsageFetcher(creds.AccessToken, c.logger)
 	rawUsage, err := fetcher.FetchUsage(ctx)
+
+	var usage collectors.ClaudeAccountUsage
+	var warnings []string
+
 	if err != nil {
+		// Check if this is a rate limit or other error that should affect status
 		status := StatusFromError(err)
-		c.logger.Warn("failed to fetch usage", "account", acct.Name, "status", status, "error", err)
-		return accountResult{
-			usage: collectors.ClaudeAccountUsage{
+
+		// If rate limited or auth failed, report that status directly
+		if status == "rate_limited" || status == "auth_failed" {
+			c.logger.Warn("subscription account error", "account", acct.Name, "status", status, "error", err)
+			usage = collectors.ClaudeAccountUsage{
 				Name:   acct.Name,
 				Type:   "subscription",
+				Tier:   creds.NormalizeTier(),
 				Status: status,
-			},
-			warnings: []string{fmt.Sprintf("account %q: %v", acct.Name, err)},
+			}
+			warnings = []string{fmt.Sprintf("account %q: %v", acct.Name, err)}
+		} else {
+			// Usage API is protected by Cloudflare and may not be accessible.
+			// Fall back to credentials-only mode: report subscription tier from
+			// the credentials file and mark as "active" (degraded but functional).
+			c.logger.Info("usage API unavailable, falling back to credentials-only mode",
+				"account", acct.Name, "error", err)
+
+			usage = collectors.ClaudeAccountUsage{
+				Name:   acct.Name,
+				Type:   "subscription",
+				Tier:   creds.NormalizeTier(),
+				Status: "active",
+			}
+			// Note: usage data (FiveHour, SevenDay, ExtraUsage) will be nil
+			// because the API is not accessible. This is expected behavior.
+			warnings = []string{fmt.Sprintf("account %q: usage API unavailable (Cloudflare protected), showing credentials-only data", acct.Name)}
 		}
-	}
-
-	// Convert the raw response to the canonical model.
-	usage := rawUsage.ToAccountUsage(acct.Name)
-
-	// Use the tier from credentials if available, otherwise normalize from the response.
-	if creds.RateLimitTier != "" {
-		usage.Tier = creds.NormalizeTier()
 	} else {
-		usage.Tier = normalizeTierString(usage.Tier)
+		// Convert the raw response to the canonical model.
+		usage = rawUsage.ToAccountUsage(acct.Name)
+
+		// Use the tier from credentials if available, otherwise normalize from the response.
+		if creds.RateLimitTier != "" {
+			usage.Tier = creds.NormalizeTier()
+		} else {
+			usage.Tier = normalizeTierString(usage.Tier)
+		}
 	}
 
 	c.logger.Debug("subscription account collected successfully", "account", acct.Name, "tier", usage.Tier)
 
 	return accountResult{
-		usage: usage,
+		usage:    usage,
+		warnings: warnings,
 	}
 }
 
