@@ -108,12 +108,13 @@ func (b *Banner) Generate(ctx context.Context) (string, error) {
 	var billing *collectors.BillingData
 	var infra *collectors.InfraStatus
 	var fastfetch *collectors.FastfetchData
+	var sysmetrics *collectors.SysMetricsData
 
 	store, err := cache.NewStore(b.config.CacheDir, b.config.Logger)
 	if err != nil {
 		b.config.Logger.Warn("banner: failed to open cache store", "error", err)
 	} else {
-		claude, billing, infra, fastfetch = b.loadCachedDataWithFastfetch(store)
+		claude, billing, infra, fastfetch, sysmetrics = b.loadCachedDataWithFastfetch(store)
 	}
 
 	// Fastfetch data will be integrated into buildSections()
@@ -162,7 +163,7 @@ func (b *Banner) Generate(ctx context.Context) (string, error) {
 	responsiveCfg.ColorEnabled = true
 
 	// Step 8: Build sections from collector data.
-	sections := b.buildSections(claude, billing, infra, fastfetch, hostname, systemStatus.Overall.String(), uptime, responsiveCfg.Features)
+	sections := b.buildSections(claude, billing, infra, fastfetch, sysmetrics, hostname, systemStatus.Overall.String(), uptime, responsiveCfg.Features)
 
 	// Step 9: Render using responsive layout.
 	responsiveLayout := layout.NewResponsiveLayout(responsiveCfg)
@@ -198,9 +199,9 @@ func (b *Banner) loadCachedData(store *cache.Store) (claude *collectors.ClaudeUs
 	return claude, billing, infra
 }
 
-// loadCachedDataWithFastfetch reads collector data including fastfetch from the cache store.
+// loadCachedDataWithFastfetch reads collector data including fastfetch and sysmetrics from the cache store.
 // Returns nil pointers for any data that cannot be loaded.
-func (b *Banner) loadCachedDataWithFastfetch(store *cache.Store) (claude *collectors.ClaudeUsage, billing *collectors.BillingData, infra *collectors.InfraStatus, fastfetch *collectors.FastfetchData) {
+func (b *Banner) loadCachedDataWithFastfetch(store *cache.Store) (claude *collectors.ClaudeUsage, billing *collectors.BillingData, infra *collectors.InfraStatus, fastfetch *collectors.FastfetchData, sysmetrics *collectors.SysMetricsData) {
 	// Load standard collectors.
 	claude, billing, infra = b.loadCachedData(store)
 
@@ -214,7 +215,15 @@ func (b *Banner) loadCachedDataWithFastfetch(store *cache.Store) (claude *collec
 		}
 	}
 
-	return claude, billing, infra, fastfetch
+	// Load sysmetrics data (always attempt, used in Wide/UltraWide modes).
+	var err error
+	sysmetrics, _, err = cache.GetTyped[collectors.SysMetricsData](store, "sysmetrics", b.config.CacheTTL)
+	if err != nil {
+		b.config.Logger.Warn("banner: failed to load sysmetrics cache", "error", err)
+		sysmetrics = nil
+	}
+
+	return claude, billing, infra, fastfetch, sysmetrics
 }
 
 // fetchWaifuImage retrieves a waifu image for the given category with the specified size.
@@ -493,8 +502,8 @@ func (b *Banner) GenerateResponsive(ctx context.Context) (string, error) {
 		imageContent = ""
 	}
 
-	// Step 7: Build sections from data (no fastfetch in this code path).
-	sections := b.buildSections(claude, billing, infra, nil, hostname, systemStatus.Overall.String(), uptime, responsiveCfg.Features)
+	// Step 7: Build sections from data (no fastfetch or sysmetrics in this code path).
+	sections := b.buildSections(claude, billing, infra, nil, nil, hostname, systemStatus.Overall.String(), uptime, responsiveCfg.Features)
 
 	// Step 8: Render using responsive layout.
 	responsiveLayout := layout.NewResponsiveLayout(responsiveCfg)
@@ -509,6 +518,7 @@ func (b *Banner) buildSections(
 	billing *collectors.BillingData,
 	infra *collectors.InfraStatus,
 	fastfetch *collectors.FastfetchData,
+	sysmetrics *collectors.SysMetricsData,
 	hostname, statusLevel, uptime string,
 	features layout.LayoutFeatures,
 ) []layout.Section {
@@ -534,7 +544,7 @@ func (b *Banner) buildSections(
 	})
 
 	// Billing section.
-	billingContent := b.formatBillingForSection(billing, features.ShowFullMetrics)
+	billingContent := b.formatBillingForSection(billing, features)
 	sections = append(sections, layout.Section{
 		Title:   "Billing",
 		Content: billingContent,
@@ -556,6 +566,15 @@ func (b *Banner) buildSections(
 		})
 	}
 
+	// SysMetrics section (CPU/RAM/Disk - shown in Wide and UltraWide modes).
+	if features.ShowSysMetrics {
+		sysmetricsContent := b.formatSysMetricsForSection(sysmetrics, features)
+		sections = append(sections, layout.Section{
+			Title:   "SysMetrics",
+			Content: sysmetricsContent,
+		})
+	}
+
 	return sections
 }
 
@@ -574,8 +593,10 @@ func (b *Banner) formatClaudeForSection(data *collectors.ClaudeUsage, showFull b
 }
 
 // formatBillingForSection formats billing data for a layout section.
-// When showFull is true, per-provider detail lines are appended.
-func (b *Banner) formatBillingForSection(data *collectors.BillingData, showFull bool) []string {
+// Uses LayoutFeatures to determine detail level:
+//   - ShowFullMetrics: per-provider detail lines
+//   - ShowBillingDelta: month-over-month comparison (Wide/UltraWide)
+func (b *Banner) formatBillingForSection(data *collectors.BillingData, features layout.LayoutFeatures) []string {
 	if data == nil {
 		return []string{"(no data)"}
 	}
@@ -598,12 +619,23 @@ func (b *Banner) formatBillingForSection(data *collectors.BillingData, showFull 
 	lines := []string{line}
 
 	// Per-provider detail when full metrics are enabled.
-	if showFull && len(data.Providers) > 0 {
+	if features.ShowFullMetrics && len(data.Providers) > 0 {
 		for _, p := range data.Providers {
 			if p.Status == "ok" {
 				pLine := "  " + p.Provider + ": $" + intToStr(int(p.CurrentMonth.SpendUSD))
 				if p.CurrentMonth.ForecastUSD != nil {
 					pLine += " (~$" + intToStr(int(*p.CurrentMonth.ForecastUSD)) + " forecast)"
+				}
+				// Month-over-month delta (Wide/UltraWide).
+				if features.ShowBillingDelta && p.PreviousMonth != nil {
+					prev := int(*p.PreviousMonth)
+					curr := int(p.CurrentMonth.SpendUSD)
+					delta := curr - prev
+					if delta > 0 {
+						pLine += " [+" + intToStr(delta) + "]"
+					} else if delta < 0 {
+						pLine += " [" + intToStr(delta) + "]"
+					}
 				}
 				lines = append(lines, pLine)
 			} else {
@@ -661,6 +693,78 @@ func (b *Banner) formatFastfetchForSection(data *collectors.FastfetchData) []str
 		return []string{"(no data)"}
 	}
 	return data.FormatCompact()
+}
+
+// formatSysMetricsForSection formats system metrics data for a layout section.
+// In Wide mode: shows inline "CPU: 45% | RAM: 62% | Disk: 78%"
+// In UltraWide mode: shows sparklines alongside current values.
+func (b *Banner) formatSysMetricsForSection(data *collectors.SysMetricsData, features layout.LayoutFeatures) []string {
+	if data == nil {
+		return []string{"(no data)"}
+	}
+
+	if features.ShowSysMetricsSparklines && (len(data.CPUHistory) > 0 || len(data.RAMHistory) > 0 || len(data.DiskHistory) > 0) {
+		// UltraWide: sparklines alongside current values.
+		var lines []string
+
+		if len(data.CPUHistory) > 0 {
+			sparkline := widgets.RenderSparkline(widgets.SparklineConfig{
+				Data:  data.CPUHistory,
+				Width: 15,
+				Label: "CPU",
+			})
+			lines = append(lines, sparkline+" "+intToStr(int(data.CPU))+"%")
+		} else {
+			lines = append(lines, "CPU: "+intToStr(int(data.CPU))+"%")
+		}
+
+		if len(data.RAMHistory) > 0 {
+			sparkline := widgets.RenderSparkline(widgets.SparklineConfig{
+				Data:  data.RAMHistory,
+				Width: 15,
+				Label: "RAM",
+			})
+			lines = append(lines, sparkline+" "+intToStr(int(data.RAM))+"%")
+		} else {
+			lines = append(lines, "RAM: "+intToStr(int(data.RAM))+"%")
+		}
+
+		if len(data.DiskHistory) > 0 {
+			sparkline := widgets.RenderSparkline(widgets.SparklineConfig{
+				Data:  data.DiskHistory,
+				Width: 15,
+				Label: "Disk",
+			})
+			lines = append(lines, sparkline+" "+intToStr(int(data.Disk))+"%")
+		} else {
+			lines = append(lines, "Disk: "+intToStr(int(data.Disk))+"%")
+		}
+
+		// Add load average.
+		lines = append(lines, "Load: "+formatFloat1(data.LoadAvg1)+" "+formatFloat1(data.LoadAvg5)+" "+formatFloat1(data.LoadAvg15))
+
+		return lines
+	}
+
+	// Wide mode: inline summary.
+	summary := "CPU: " + intToStr(int(data.CPU)) + "% | RAM: " + intToStr(int(data.RAM)) + "% | Disk: " + intToStr(int(data.Disk)) + "%"
+	lines := []string{summary}
+
+	if data.LoadAvg1 > 0 {
+		lines = append(lines, "Load: "+formatFloat1(data.LoadAvg1)+" "+formatFloat1(data.LoadAvg5)+" "+formatFloat1(data.LoadAvg15))
+	}
+
+	return lines
+}
+
+// formatFloat1 formats a float to 1 decimal place without importing fmt.
+func formatFloat1(f float64) string {
+	whole := int(f)
+	frac := int((f - float64(whole)) * 10)
+	if frac < 0 {
+		frac = -frac
+	}
+	return intToStr(whole) + "." + intToStr(frac)
 }
 
 // splitLines splits a string by newline characters without importing strings.

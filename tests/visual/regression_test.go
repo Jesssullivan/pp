@@ -108,36 +108,56 @@ func TestLayoutModeDetection(t *testing.T) {
 func TestLayoutFeaturesForSize(t *testing.T) {
 	expectedFeatures := map[string]layout.LayoutFeatures{
 		"compact": {
-			ShowImage:       false,
-			ShowSparklines:  false,
-			ShowFullMetrics: false,
-			ShowNodeMetrics: false,
-			VerticalStack:   true,
-			ShowBorders:     false,
+			ShowImage:                false,
+			ShowSparklines:           false,
+			ShowFullMetrics:          false,
+			ShowNodeMetrics:          false,
+			VerticalStack:            true,
+			ShowBorders:              false,
+			ShowGauges:               false,
+			ShowSysMetrics:           false,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         false,
 		},
 		"standard": {
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          false,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               false,
+			ShowSysMetrics:           false,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         false,
 		},
 		"wide": {
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          true,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               true,
+			ShowSysMetrics:           true,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         true,
 		},
 		"ultrawide": {
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          true,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               true,
+			ShowSysMetrics:           true,
+			ShowSysMetricsSparklines: true,
+			ShowExtraUsage:           true,
+			ShowBillingDelta:         true,
 		},
 	}
 
@@ -163,6 +183,21 @@ func TestLayoutFeaturesForSize(t *testing.T) {
 			}
 			if cfg.Features.ShowBorders != expected.ShowBorders {
 				t.Errorf("ShowBorders = %v, want %v", cfg.Features.ShowBorders, expected.ShowBorders)
+			}
+			if cfg.Features.ShowGauges != expected.ShowGauges {
+				t.Errorf("ShowGauges = %v, want %v", cfg.Features.ShowGauges, expected.ShowGauges)
+			}
+			if cfg.Features.ShowSysMetrics != expected.ShowSysMetrics {
+				t.Errorf("ShowSysMetrics = %v, want %v", cfg.Features.ShowSysMetrics, expected.ShowSysMetrics)
+			}
+			if cfg.Features.ShowSysMetricsSparklines != expected.ShowSysMetricsSparklines {
+				t.Errorf("ShowSysMetricsSparklines = %v, want %v", cfg.Features.ShowSysMetricsSparklines, expected.ShowSysMetricsSparklines)
+			}
+			if cfg.Features.ShowExtraUsage != expected.ShowExtraUsage {
+				t.Errorf("ShowExtraUsage = %v, want %v", cfg.Features.ShowExtraUsage, expected.ShowExtraUsage)
+			}
+			if cfg.Features.ShowBillingDelta != expected.ShowBillingDelta {
+				t.Errorf("ShowBillingDelta = %v, want %v", cfg.Features.ShowBillingDelta, expected.ShowBillingDelta)
 			}
 		})
 	}

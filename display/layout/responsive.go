@@ -96,6 +96,16 @@ type LayoutFeatures struct {
 	VerticalStack bool
 	// ShowBorders enables Unicode box drawing borders.
 	ShowBorders bool
+	// ShowGauges enables gauge bars for resource utilization.
+	ShowGauges bool
+	// ShowSysMetrics enables system metrics section (CPU/RAM/Disk current values).
+	ShowSysMetrics bool
+	// ShowSysMetricsSparklines enables sparklines alongside sysmetrics values (UltraWide only).
+	ShowSysMetricsSparklines bool
+	// ShowExtraUsage enables Claude extra usage (overuse credits) display.
+	ShowExtraUsage bool
+	// ShowBillingDelta enables month-over-month billing comparison.
+	ShowBillingDelta bool
 }
 
 // ResponsiveConfig holds the complete configuration for a responsive layout.
@@ -263,46 +273,71 @@ func columnsForMode(mode LayoutMode, termWidth int) ColumnConfig {
 }
 
 // featuresForMode returns the feature configuration for a layout mode.
+// Each mode returns progressively richer feature sets:
+//   - Compact: Minimal - no sparklines, no gauges, compact billing
+//   - Standard: Base features - sparklines, basic billing, no sysmetrics
+//   - Wide: Enhanced - sparklines, gauges, sysmetrics summary, billing delta
+//   - UltraWide: Full density - everything plus sysmetrics sparklines, extra usage
 func featuresForMode(mode LayoutMode) LayoutFeatures {
 	switch mode {
 	case LayoutUltraWide:
 		return LayoutFeatures{
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          true,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               true,
+			ShowSysMetrics:           true,
+			ShowSysMetricsSparklines: true,
+			ShowExtraUsage:           true,
+			ShowBillingDelta:         true,
 		}
 
 	case LayoutWide:
 		return LayoutFeatures{
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          true,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               true,
+			ShowSysMetrics:           true,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         true,
 		}
 
 	case LayoutStandard:
 		return LayoutFeatures{
-			ShowImage:       true,
-			ShowSparklines:  true,
-			ShowFullMetrics: true,
-			ShowNodeMetrics: true,
-			VerticalStack:   false,
-			ShowBorders:     true,
+			ShowImage:                true,
+			ShowSparklines:           true,
+			ShowFullMetrics:          true,
+			ShowNodeMetrics:          false,
+			VerticalStack:            false,
+			ShowBorders:              true,
+			ShowGauges:               false,
+			ShowSysMetrics:           false,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         false,
 		}
 
 	default: // LayoutCompact
 		return LayoutFeatures{
-			ShowImage:       false,
-			ShowSparklines:  false,
-			ShowFullMetrics: false,
-			ShowNodeMetrics: false,
-			VerticalStack:   true,
-			ShowBorders:     false, // No box borders in compact mode
+			ShowImage:                false,
+			ShowSparklines:           false,
+			ShowFullMetrics:          false,
+			ShowNodeMetrics:          false,
+			VerticalStack:            true,
+			ShowBorders:              false,
+			ShowGauges:               false,
+			ShowSysMetrics:           false,
+			ShowSysMetricsSparklines: false,
+			ShowExtraUsage:           false,
+			ShowBillingDelta:         false,
 		}
 	}
 }

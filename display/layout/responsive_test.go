@@ -206,18 +206,23 @@ func TestColumnsForMode(t *testing.T) {
 // TestFeaturesForMode verifies feature flags for each mode.
 func TestFeaturesForMode(t *testing.T) {
 	tests := []struct {
-		mode         LayoutMode
-		wantImage    bool
-		wantSpark    bool
-		wantMetrics  bool
-		wantNode     bool
-		wantVStack   bool
-		wantBorders  bool
+		mode                     LayoutMode
+		wantImage                bool
+		wantSpark                bool
+		wantMetrics              bool
+		wantNode                 bool
+		wantVStack               bool
+		wantBorders              bool
+		wantGauges               bool
+		wantSysMetrics           bool
+		wantSysMetricsSparklines bool
+		wantExtraUsage           bool
+		wantBillingDelta         bool
 	}{
-		{LayoutCompact, false, false, false, false, true, false},
-		{LayoutStandard, true, true, true, true, false, true},
-		{LayoutWide, true, true, true, true, false, true},
-		{LayoutUltraWide, true, true, true, true, false, true},
+		{LayoutCompact, false, false, false, false, true, false, false, false, false, false, false},
+		{LayoutStandard, true, true, true, false, false, true, false, false, false, false, false},
+		{LayoutWide, true, true, true, true, false, true, true, true, false, false, true},
+		{LayoutUltraWide, true, true, true, true, false, true, true, true, true, true, true},
 	}
 
 	for _, tt := range tests {
@@ -242,7 +247,142 @@ func TestFeaturesForMode(t *testing.T) {
 			if f.ShowBorders != tt.wantBorders {
 				t.Errorf("ShowBorders = %v, want %v", f.ShowBorders, tt.wantBorders)
 			}
+			if f.ShowGauges != tt.wantGauges {
+				t.Errorf("ShowGauges = %v, want %v", f.ShowGauges, tt.wantGauges)
+			}
+			if f.ShowSysMetrics != tt.wantSysMetrics {
+				t.Errorf("ShowSysMetrics = %v, want %v", f.ShowSysMetrics, tt.wantSysMetrics)
+			}
+			if f.ShowSysMetricsSparklines != tt.wantSysMetricsSparklines {
+				t.Errorf("ShowSysMetricsSparklines = %v, want %v", f.ShowSysMetricsSparklines, tt.wantSysMetricsSparklines)
+			}
+			if f.ShowExtraUsage != tt.wantExtraUsage {
+				t.Errorf("ShowExtraUsage = %v, want %v", f.ShowExtraUsage, tt.wantExtraUsage)
+			}
+			if f.ShowBillingDelta != tt.wantBillingDelta {
+				t.Errorf("ShowBillingDelta = %v, want %v", f.ShowBillingDelta, tt.wantBillingDelta)
+			}
 		})
+	}
+}
+
+// TestFeaturesDifferentiation verifies that Standard, Wide, and UltraWide
+// return DISTINCT feature flags (Gap G1 fix).
+func TestFeaturesDifferentiation(t *testing.T) {
+	standard := featuresForMode(LayoutStandard)
+	wide := featuresForMode(LayoutWide)
+	ultrawide := featuresForMode(LayoutUltraWide)
+
+	// Standard vs Wide: Wide has more features.
+	if standard.ShowGauges == wide.ShowGauges {
+		t.Error("Standard and Wide should differ on ShowGauges")
+	}
+	if standard.ShowSysMetrics == wide.ShowSysMetrics {
+		t.Error("Standard and Wide should differ on ShowSysMetrics")
+	}
+	if standard.ShowBillingDelta == wide.ShowBillingDelta {
+		t.Error("Standard and Wide should differ on ShowBillingDelta")
+	}
+	if standard.ShowNodeMetrics == wide.ShowNodeMetrics {
+		t.Error("Standard and Wide should differ on ShowNodeMetrics")
+	}
+
+	// Wide vs UltraWide: UltraWide has additional features.
+	if wide.ShowSysMetricsSparklines == ultrawide.ShowSysMetricsSparklines {
+		t.Error("Wide and UltraWide should differ on ShowSysMetricsSparklines")
+	}
+	if wide.ShowExtraUsage == ultrawide.ShowExtraUsage {
+		t.Error("Wide and UltraWide should differ on ShowExtraUsage")
+	}
+
+	// Verify SysMetrics is false for Compact and Standard.
+	compact := featuresForMode(LayoutCompact)
+	if compact.ShowSysMetrics {
+		t.Error("Compact should not show SysMetrics")
+	}
+	if standard.ShowSysMetrics {
+		t.Error("Standard should not show SysMetrics")
+	}
+
+	// Verify SysMetrics is true for Wide and UltraWide.
+	if !wide.ShowSysMetrics {
+		t.Error("Wide should show SysMetrics")
+	}
+	if !ultrawide.ShowSysMetrics {
+		t.Error("UltraWide should show SysMetrics")
+	}
+
+	// Verify SysMetricsSparklines is only true for UltraWide.
+	if compact.ShowSysMetricsSparklines {
+		t.Error("Compact should not show SysMetricsSparklines")
+	}
+	if standard.ShowSysMetricsSparklines {
+		t.Error("Standard should not show SysMetricsSparklines")
+	}
+	if wide.ShowSysMetricsSparklines {
+		t.Error("Wide should not show SysMetricsSparklines")
+	}
+	if !ultrawide.ShowSysMetricsSparklines {
+		t.Error("UltraWide should show SysMetricsSparklines")
+	}
+}
+
+// TestProgressiveDensity verifies that each wider mode enables strictly MORE features.
+func TestProgressiveDensity(t *testing.T) {
+	compact := featuresForMode(LayoutCompact)
+	standard := featuresForMode(LayoutStandard)
+	wide := featuresForMode(LayoutWide)
+	ultrawide := featuresForMode(LayoutUltraWide)
+
+	// Count enabled features for each mode.
+	countFeatures := func(f LayoutFeatures) int {
+		count := 0
+		if f.ShowImage {
+			count++
+		}
+		if f.ShowSparklines {
+			count++
+		}
+		if f.ShowFullMetrics {
+			count++
+		}
+		if f.ShowNodeMetrics {
+			count++
+		}
+		if f.ShowBorders {
+			count++
+		}
+		if f.ShowGauges {
+			count++
+		}
+		if f.ShowSysMetrics {
+			count++
+		}
+		if f.ShowSysMetricsSparklines {
+			count++
+		}
+		if f.ShowExtraUsage {
+			count++
+		}
+		if f.ShowBillingDelta {
+			count++
+		}
+		return count
+	}
+
+	compactCount := countFeatures(compact)
+	standardCount := countFeatures(standard)
+	wideCount := countFeatures(wide)
+	ultrawideCount := countFeatures(ultrawide)
+
+	if compactCount >= standardCount {
+		t.Errorf("Compact (%d features) should have fewer features than Standard (%d)", compactCount, standardCount)
+	}
+	if standardCount >= wideCount {
+		t.Errorf("Standard (%d features) should have fewer features than Wide (%d)", standardCount, wideCount)
+	}
+	if wideCount >= ultrawideCount {
+		t.Errorf("Wide (%d features) should have fewer features than UltraWide (%d)", wideCount, ultrawideCount)
 	}
 }
 
