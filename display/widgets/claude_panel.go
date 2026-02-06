@@ -49,6 +49,9 @@ type AccountDisplay struct {
 
 	// StatusIcon is the color-coded status indicator.
 	StatusIcon string
+
+	// ExtraUsage holds overuse credit data (subscription only).
+	ExtraUsage *collectors.ExtraUsage
 }
 
 // ClaudePanel is a Bubble Tea component for displaying Claude account usage.
@@ -116,6 +119,11 @@ func (p *ClaudePanel) createAccountDisplay(acct collectors.ClaudeAccountUsage) A
 			if !acct.SevenDay.ResetsAt.IsZero() {
 				display.WeeklyReset = FormatCountdown(acct.SevenDay.ResetsAt)
 			}
+		}
+
+		// Extra usage (overuse credits)
+		if acct.ExtraUsage != nil && acct.ExtraUsage.Enabled {
+			display.ExtraUsage = acct.ExtraUsage
 		}
 	} else if acct.Type == "api" && acct.RateLimits != nil {
 		// API accounts use requests as "session" and tokens as "weekly"
@@ -302,6 +310,23 @@ func (p *ClaudePanel) renderAccount(acct AccountDisplay) string {
 		lines = append(lines, barLine)
 	}
 
+	// Extra usage (overuse credits) gauge
+	if acct.ExtraUsage != nil {
+		extraBar := p.createProgressBar(acct.ExtraUsage.Utilization)
+		usedDollars := acct.ExtraUsage.UsedCredits / 100.0
+		limitDollars := float64(acct.ExtraUsage.MonthlyLimit) / 100.0
+
+		barLine := fmt.Sprintf("  %s %s %3.0f%%",
+			labelStyle.Render("Extra"),
+			extraBar.ViewAs(acct.ExtraUsage.Utilization/100),
+			acct.ExtraUsage.Utilization)
+		lines = append(lines, barLine)
+
+		creditLine := fmt.Sprintf("  %s",
+			resetStyle.Render(fmt.Sprintf("$%.2f / $%.2f credits", usedDollars, limitDollars)))
+		lines = append(lines, creditLine)
+	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -337,6 +362,13 @@ func (p *ClaudePanel) RenderCompact() string {
 			}
 			period += ")"
 			periods = append(periods, period)
+		}
+
+		// Add extra usage indicator if present.
+		if acct.ExtraUsage != nil {
+			usedDollars := acct.ExtraUsage.UsedCredits / 100.0
+			limitDollars := float64(acct.ExtraUsage.MonthlyLimit) / 100.0
+			periods = append(periods, fmt.Sprintf("$%.0f/$%.0f extra", usedDollars, limitDollars))
 		}
 
 		if len(periods) > 0 {

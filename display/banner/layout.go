@@ -431,6 +431,24 @@ func (l *Layout) formatSubscriptionAccount(acct collectors.ClaudeAccountUsage) s
 		}
 		parts = append(parts, part)
 	}
+	// Extra usage (overuse credits) display.
+	if acct.ExtraUsage != nil && acct.ExtraUsage.Enabled {
+		usedDollars := acct.ExtraUsage.UsedCredits / 100.0
+		limitDollars := float64(acct.ExtraUsage.MonthlyLimit) / 100.0
+		extraPart := fmt.Sprintf("$%.0f/$%.0f extra (%.0f%%)", usedDollars, limitDollars, acct.ExtraUsage.Utilization)
+
+		if acct.ExtraUsage.Utilization >= 90 {
+			if l.config.ColorEnabled {
+				extraPart = lipgloss.NewStyle().Foreground(colorDanger).Render(extraPart)
+			}
+		} else if acct.ExtraUsage.Utilization >= 70 {
+			if l.config.ColorEnabled {
+				extraPart = lipgloss.NewStyle().Foreground(colorWarning).Render(extraPart)
+			}
+		}
+		parts = append(parts, extraPart)
+	}
+
 	if len(parts) == 0 {
 		return fmt.Sprintf("  %s: 0%% (5h)", acct.Name)
 	}

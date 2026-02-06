@@ -27,12 +27,14 @@ func fetchDataCmd(cacheDir string, ttl time.Duration) tea.Cmd {
 		billing, _, _ := cache.GetTyped[collectors.BillingData](store, "billing", ttl)
 		infra, _, _ := cache.GetTyped[collectors.InfraStatus](store, "infra", ttl)
 		fastfetch, _, _ := cache.GetTyped[collectors.FastfetchData](store, "fastfetch", ttl)
+		sysmetrics, _, _ := cache.GetTyped[collectors.SysMetricsData](store, "sysmetrics", ttl)
 
 		return dataRefreshMsg{
-			claude:    claude,
-			billing:   billing,
-			infra:     infra,
-			fastfetch: fastfetch,
+			claude:     claude,
+			billing:    billing,
+			infra:      infra,
+			fastfetch:  fastfetch,
+			sysmetrics: sysmetrics,
 		}
 	}
 }

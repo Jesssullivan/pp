@@ -204,6 +204,11 @@ func renderProviderTableWithSparklines(data *collectors.BillingData, width int) 
 			forecastStyle := lipgloss.NewStyle().Foreground(colorMuted)
 			lines = append(lines, forecastStyle.Render(forecastLine))
 		}
+
+		// Month-over-month comparison
+		if mom := widgets.FormatMonthOverMonth(p.CurrentMonth.SpendUSD, p.PreviousMonth, true); mom != "" {
+			lines = append(lines, "    "+mom)
+		}
 	}
 
 	return lines

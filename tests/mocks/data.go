@@ -227,6 +227,8 @@ type ProviderConfig struct {
 	AccountName string
 	// CurrentSpend is the current month spend in USD.
 	CurrentSpend float64
+	// PreviousMonth is last month's total spend in USD, if available.
+	PreviousMonth *float64
 	// Forecast is the projected end-of-month spend in USD.
 	Forecast *float64
 	// Budget is the monthly budget in USD.
@@ -249,42 +251,52 @@ func DefaultProviderConfigs() []ProviderConfig {
 	budget50 := 50.0
 	budget30 := 30.0
 
+	// Previous month values: some higher (cost decreased), some lower (cost increased).
+	prevCivo := 110.00       // current 125.50 is higher -> cost increase
+	prevDO := 72.00          // current 65.25 is lower -> cost decrease
+	prevAWS := 38.50         // current 38.75 is nearly the same -> flat
+	prevDreamhost := 24.99   // current 19.99 is lower -> cost decrease
+
 	return []ProviderConfig{
 		{
-			Provider:     "civo",
-			AccountName:  "tinyland-prod",
-			CurrentSpend: 125.50,
-			Forecast:     &forecast150,
-			Budget:       &budget200,
-			HistoryDays:  30,
-			Status:       "ok",
+			Provider:      "civo",
+			AccountName:   "tinyland-prod",
+			CurrentSpend:  125.50,
+			PreviousMonth: &prevCivo,
+			Forecast:      &forecast150,
+			Budget:        &budget200,
+			HistoryDays:   30,
+			Status:        "ok",
 		},
 		{
-			Provider:     "digitalocean",
-			AccountName:  "tinyland-do",
-			CurrentSpend: 65.25,
-			Forecast:     &forecast80,
-			Budget:       &budget100,
-			HistoryDays:  30,
-			Status:       "ok",
+			Provider:      "digitalocean",
+			AccountName:   "tinyland-do",
+			CurrentSpend:  65.25,
+			PreviousMonth: &prevDO,
+			Forecast:      &forecast80,
+			Budget:        &budget100,
+			HistoryDays:   30,
+			Status:        "ok",
 		},
 		{
-			Provider:     "aws",
-			AccountName:  "tinyland-aws",
-			CurrentSpend: 38.75,
-			Forecast:     &forecast45,
-			Budget:       &budget50,
-			HistoryDays:  30,
-			Status:       "ok",
+			Provider:      "aws",
+			AccountName:   "tinyland-aws",
+			CurrentSpend:  38.75,
+			PreviousMonth: &prevAWS,
+			Forecast:      &forecast45,
+			Budget:        &budget50,
+			HistoryDays:   30,
+			Status:        "ok",
 		},
 		{
-			Provider:     "dreamhost",
-			AccountName:  "tinyland-hosting",
-			CurrentSpend: 19.99,
-			Forecast:     &forecast25,
-			Budget:       &budget30,
-			HistoryDays:  30,
-			Status:       "ok",
+			Provider:      "dreamhost",
+			AccountName:   "tinyland-hosting",
+			CurrentSpend:  19.99,
+			PreviousMonth: &prevDreamhost,
+			Forecast:      &forecast25,
+			Budget:        &budget30,
+			HistoryDays:   30,
+			Status:        "ok",
 		},
 	}
 }
@@ -308,8 +320,10 @@ func MockProviderBilling(cfg ProviderConfig) collectors.ProviderBilling {
 		DashboardURL: "https://" + cfg.Provider + ".com/billing",
 	}
 
-	// Generate previous month if current spend is meaningful.
-	if cfg.CurrentSpend > 0 {
+	// Use explicit PreviousMonth if provided, otherwise generate one.
+	if cfg.PreviousMonth != nil {
+		billing.PreviousMonth = cfg.PreviousMonth
+	} else if cfg.CurrentSpend > 0 {
 		prev := cfg.CurrentSpend * (0.8 + randFloat()*0.4) // 80-120% of current
 		billing.PreviousMonth = &prev
 	}
@@ -690,12 +704,13 @@ func MockBillingPanelData() widgets.BillingPanelData {
 		}
 
 		providers[i] = widgets.ProviderSpend{
-			Name:     p.Provider,
-			Current:  p.CurrentMonth.SpendUSD,
-			Forecast: p.CurrentMonth.ForecastUSD,
-			Budget:   p.CurrentMonth.BudgetUSD,
-			History:  history,
-			Status:   p.Status,
+			Name:          p.Provider,
+			Current:       p.CurrentMonth.SpendUSD,
+			Forecast:      p.CurrentMonth.ForecastUSD,
+			Budget:        p.CurrentMonth.BudgetUSD,
+			PreviousMonth: p.PreviousMonth,
+			History:       history,
+			Status:        p.Status,
 		}
 	}
 
@@ -918,4 +933,64 @@ func MockFastfetchData() *collectors.FastfetchData {
 // MockFastfetchDataEmpty generates empty fastfetch data.
 func MockFastfetchDataEmpty() *collectors.FastfetchData {
 	return &collectors.FastfetchData{}
+}
+
+// ========== SysMetrics Mock Data ==========
+
+// MockSysMetricsData generates realistic system metrics with 60-point history.
+func MockSysMetricsData() *collectors.SysMetricsData {
+	cpuHistory := make([]float64, 60)
+	ramHistory := make([]float64, 60)
+	diskHistory := make([]float64, 60)
+
+	for i := 0; i < 60; i++ {
+		// CPU: oscillates between 15-65% with some variance.
+		cpuHistory[i] = 25.0 + float64(randInt(40))
+		// RAM: slowly trends upward from ~40% to ~60%.
+		ramHistory[i] = 40.0 + float64(i)*0.33 + float64(randInt(5))
+		// Disk: stable around 43% with minimal drift.
+		diskHistory[i] = 42.0 + float64(randInt(3))
+	}
+
+	return &collectors.SysMetricsData{
+		CPU:         cpuHistory[59],
+		RAM:         ramHistory[59],
+		Disk:        diskHistory[59],
+		LoadAvg1:    1.25 + randFloat()*0.5,
+		LoadAvg5:    0.98 + randFloat()*0.3,
+		LoadAvg15:   0.75 + randFloat()*0.2,
+		CPUHistory:  cpuHistory,
+		RAMHistory:  ramHistory,
+		DiskHistory: diskHistory,
+	}
+}
+
+// MockSysMetricsDataEmpty generates empty system metrics data.
+func MockSysMetricsDataEmpty() *collectors.SysMetricsData {
+	return &collectors.SysMetricsData{}
+}
+
+// MockSysMetricsDataHighUtilization generates system metrics with high utilization.
+func MockSysMetricsDataHighUtilization() *collectors.SysMetricsData {
+	cpuHistory := make([]float64, 60)
+	ramHistory := make([]float64, 60)
+	diskHistory := make([]float64, 60)
+
+	for i := 0; i < 60; i++ {
+		cpuHistory[i] = 85.0 + float64(randInt(15))
+		ramHistory[i] = 90.0 + float64(randInt(10))
+		diskHistory[i] = 88.0 + float64(randInt(12))
+	}
+
+	return &collectors.SysMetricsData{
+		CPU:         95.2,
+		RAM:         92.7,
+		Disk:        91.3,
+		LoadAvg1:    8.50,
+		LoadAvg5:    7.25,
+		LoadAvg15:   6.80,
+		CPUHistory:  cpuHistory,
+		RAMHistory:  ramHistory,
+		DiskHistory: diskHistory,
+	}
 }

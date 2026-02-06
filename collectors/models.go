@@ -914,6 +914,25 @@ func (n *TailscaleNode) HasHighUtilization() bool {
 	return false
 }
 
+// ========== SysMetrics Models ==========
+
+// SysMetricsData holds current system metrics plus history ring buffers.
+// NOTE: This is intentionally duplicated from collectors/sysmetrics/types.go
+// to maintain cache compatibility without creating an import cycle.
+// The sysmetrics package imports collectors for the Collector interface,
+// so we cannot import sysmetrics here.
+type SysMetricsData struct {
+	CPU         float64   `json:"cpu"`
+	RAM         float64   `json:"ram"`
+	Disk        float64   `json:"disk"`
+	LoadAvg1    float64   `json:"load_avg_1"`
+	LoadAvg5    float64   `json:"load_avg_5"`
+	LoadAvg15   float64   `json:"load_avg_15"`
+	CPUHistory  []float64 `json:"cpu_history"`
+	RAMHistory  []float64 `json:"ram_history"`
+	DiskHistory []float64 `json:"disk_history"`
+}
+
 // ========== Fastfetch Models ==========
 
 // FastfetchModule represents a single fastfetch output module.

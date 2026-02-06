@@ -318,3 +318,130 @@ func TestRenderBillingPanel_NoSparklineWithoutHistory(t *testing.T) {
 		t.Error("expected placeholder dashes when no history available")
 	}
 }
+
+func TestFormatMonthOverMonth_Increase(t *testing.T) {
+	prev := 100.0
+	result := FormatMonthOverMonth(120.0, &prev, false)
+
+	// 20% increase.
+	if !strings.Contains(result, "\u2191") {
+		t.Errorf("expected up arrow for increase, got: %s", result)
+	}
+	if !strings.Contains(result, "20%") {
+		t.Errorf("expected '20%%' in output, got: %s", result)
+	}
+	if !strings.Contains(result, "vs last mo") {
+		t.Errorf("expected 'vs last mo' suffix, got: %s", result)
+	}
+}
+
+func TestFormatMonthOverMonth_Decrease(t *testing.T) {
+	prev := 100.0
+	result := FormatMonthOverMonth(85.0, &prev, false)
+
+	// 15% decrease.
+	if !strings.Contains(result, "\u2193") {
+		t.Errorf("expected down arrow for decrease, got: %s", result)
+	}
+	if !strings.Contains(result, "15%") {
+		t.Errorf("expected '15%%' in output, got: %s", result)
+	}
+}
+
+func TestFormatMonthOverMonth_Flat(t *testing.T) {
+	prev := 100.0
+	result := FormatMonthOverMonth(100.5, &prev, false)
+
+	// 0.5% change is considered flat (<1%).
+	if !strings.Contains(result, "\u2192") {
+		t.Errorf("expected right arrow for flat change, got: %s", result)
+	}
+	if !strings.Contains(result, "vs last mo") {
+		t.Errorf("expected 'vs last mo' suffix, got: %s", result)
+	}
+}
+
+func TestFormatMonthOverMonth_NilPrevious(t *testing.T) {
+	result := FormatMonthOverMonth(100.0, nil, false)
+	if result != "" {
+		t.Errorf("expected empty string for nil previous, got: %s", result)
+	}
+}
+
+func TestFormatMonthOverMonth_ZeroPrevious(t *testing.T) {
+	prev := 0.0
+	result := FormatMonthOverMonth(100.0, &prev, false)
+	if result != "" {
+		t.Errorf("expected empty string for zero previous, got: %s", result)
+	}
+}
+
+func TestFormatMonthOverMonth_ColorEnabled(t *testing.T) {
+	prev := 100.0
+	resultColor := FormatMonthOverMonth(120.0, &prev, true)
+	resultNoColor := FormatMonthOverMonth(120.0, &prev, false)
+
+	// With color enabled, output may contain ANSI escapes (depends on terminal).
+	// At minimum, both should contain the core text.
+	if !strings.Contains(resultNoColor, "20%") {
+		t.Errorf("expected '20%%' in non-color output, got: %s", resultNoColor)
+	}
+	// Color output should not be empty and should contain the same percentage info.
+	if len(resultColor) == 0 {
+		t.Error("expected non-empty output with color enabled")
+	}
+	if !strings.Contains(resultColor, "20%") {
+		t.Errorf("expected '20%%' in colored output, got: %s", resultColor)
+	}
+}
+
+func TestRenderBillingPanel_WithPreviousMonth(t *testing.T) {
+	prev := 40.0
+	data := BillingPanelData{
+		Providers: []ProviderSpend{
+			{
+				Name:          "civo",
+				Current:       45.50,
+				PreviousMonth: &prev,
+				Status:        "ok",
+			},
+		},
+		TotalCurrent: 45.50,
+	}
+	cfg := DefaultBillingPanelConfig()
+	cfg.ColorEnabled = false
+
+	result := RenderBillingPanel(data, cfg)
+
+	// Should contain month-over-month comparison.
+	if !strings.Contains(result, "vs last mo") {
+		t.Errorf("expected month-over-month comparison in output, got: %s", result)
+	}
+	// 45.50 vs 40.0 = 13.75% increase, should show up arrow.
+	if !strings.Contains(result, "\u2191") {
+		t.Errorf("expected up arrow for cost increase, got: %s", result)
+	}
+}
+
+func TestRenderBillingPanel_NoPreviousMonthNoComparison(t *testing.T) {
+	data := BillingPanelData{
+		Providers: []ProviderSpend{
+			{
+				Name:          "civo",
+				Current:       45.50,
+				PreviousMonth: nil,
+				Status:        "ok",
+			},
+		},
+		TotalCurrent: 45.50,
+	}
+	cfg := DefaultBillingPanelConfig()
+	cfg.ColorEnabled = false
+
+	result := RenderBillingPanel(data, cfg)
+
+	// Should NOT contain month-over-month comparison.
+	if strings.Contains(result, "vs last mo") {
+		t.Errorf("expected no month-over-month comparison for nil previous, got: %s", result)
+	}
+}

@@ -260,10 +260,10 @@ func TestNewDaemon(t *testing.T) {
 		t.Error("daemon.registry is nil")
 	}
 
-	// Verify all four collectors are registered.
+	// Verify all five collectors are registered.
 	all := d.registry.All()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 collectors registered, got %d", len(all))
+	if len(all) != 5 {
+		t.Fatalf("expected 5 collectors registered, got %d", len(all))
 	}
 
 	names := make(map[string]bool)
@@ -271,7 +271,7 @@ func TestNewDaemon(t *testing.T) {
 		names[c.Name()] = true
 	}
 
-	for _, expected := range []string{"claude", "billing", "infra", "fastfetch"} {
+	for _, expected := range []string{"claude", "billing", "infra", "fastfetch", "sysmetrics"} {
 		if !names[expected] {
 			t.Errorf("collector %q not registered", expected)
 		}

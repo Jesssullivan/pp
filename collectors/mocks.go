@@ -28,6 +28,12 @@ func MockClaudeUsage() *ClaudeUsage {
 					Utilization: 0.0,
 					ResetsAt:    sevenDayReset,
 				},
+				ExtraUsage: &ExtraUsage{
+					Enabled:      true,
+					MonthlyLimit: 10000, // $100.00
+					UsedCredits:  0.0,
+					Utilization:  0.0,
+				},
 			},
 		},
 	}
@@ -295,6 +301,35 @@ func MockFastfetchData() *FastfetchData {
 			Type:   "Local IP",
 			Result: "192.168.1.100",
 		},
+	}
+}
+
+// MockSysMetricsData returns zero-state system metrics with empty history.
+// Shows moderate utilization values suitable for UI testing.
+func MockSysMetricsData() *SysMetricsData {
+	// Generate a 60-sample history with a gentle sine-like pattern.
+	cpuHistory := make([]float64, 60)
+	ramHistory := make([]float64, 60)
+	diskHistory := make([]float64, 60)
+	for i := 0; i < 60; i++ {
+		// CPU: oscillates around 35% (20-50 range)
+		cpuHistory[i] = 35.0 + 15.0*float64(i%20)/20.0
+		// RAM: slowly increases from 40% to 55%
+		ramHistory[i] = 40.0 + float64(i)*0.25
+		// Disk: essentially static around 43%
+		diskHistory[i] = 43.0 + float64(i%5)*0.1
+	}
+
+	return &SysMetricsData{
+		CPU:         32.5,
+		RAM:         52.3,
+		Disk:        43.1,
+		LoadAvg1:    1.25,
+		LoadAvg5:    0.98,
+		LoadAvg15:   0.75,
+		CPUHistory:  cpuHistory,
+		RAMHistory:  ramHistory,
+		DiskHistory: diskHistory,
 	}
 }
 

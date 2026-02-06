@@ -18,6 +18,7 @@ import (
 	"gitlab.com/tinyland/lab/prompt-pulse/collectors/claude"
 	"gitlab.com/tinyland/lab/prompt-pulse/collectors/fastfetch"
 	"gitlab.com/tinyland/lab/prompt-pulse/collectors/infra"
+	"gitlab.com/tinyland/lab/prompt-pulse/collectors/sysmetrics"
 	"gitlab.com/tinyland/lab/prompt-pulse/config"
 	"gitlab.com/tinyland/lab/prompt-pulse/status"
 	"gitlab.com/tinyland/lab/prompt-pulse/waifu"
@@ -93,6 +94,10 @@ func newDaemon(cfg *config.Config, logger *slog.Logger) (*daemon, error) {
 	// Register fastfetch collector for system information.
 	ffCollector := fastfetch.NewFastfetchCollector(fastfetch.DefaultConfig(), logger)
 	registry.Register(ffCollector)
+
+	// Register sysmetrics collector for local CPU, RAM, Disk, and Load Average.
+	sysmetricsCollector := sysmetrics.NewSysMetricsCollector(cfg.Daemon.CacheDir, logger)
+	registry.Register(sysmetricsCollector)
 
 	pidFile := filepath.Join(cfg.Daemon.CacheDir, "prompt-pulse.pid")
 

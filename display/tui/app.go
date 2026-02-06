@@ -54,6 +54,7 @@ type Model struct {
 	billing     *collectors.BillingData
 	infra       *collectors.InfraStatus
 	fastfetch   *collectors.FastfetchData
+	sysmetrics  *collectors.SysMetricsData
 	lastUpdated time.Time
 	ready       bool
 
@@ -142,16 +143,23 @@ func (m *Model) SetFastfetchData(data *collectors.FastfetchData) {
 	m.lastUpdated = time.Now()
 }
 
+// SetSysMetricsData updates the model with new system metrics data.
+func (m *Model) SetSysMetricsData(data *collectors.SysMetricsData) {
+	m.sysmetrics = data
+	m.lastUpdated = time.Now()
+}
+
 // tickMsg signals a periodic refresh timer has elapsed.
 type tickMsg time.Time
 
 // dataRefreshMsg carries refreshed data from the cache.
 type dataRefreshMsg struct {
-	claude    *collectors.ClaudeUsage
-	billing   *collectors.BillingData
-	infra     *collectors.InfraStatus
-	fastfetch *collectors.FastfetchData
-	err       error
+	claude     *collectors.ClaudeUsage
+	billing    *collectors.BillingData
+	infra      *collectors.InfraStatus
+	fastfetch  *collectors.FastfetchData
+	sysmetrics *collectors.SysMetricsData
+	err        error
 }
 
 // tickCmd returns a command that fires a tickMsg after the given interval.
@@ -276,6 +284,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.fastfetch != nil {
 				m.fastfetch = msg.fastfetch
 			}
+			if msg.sysmetrics != nil {
+				m.sysmetrics = msg.sysmetrics
+			}
 			m.lastUpdated = time.Now()
 			m.refreshViewport()
 		}
@@ -344,7 +355,7 @@ func (m *Model) refreshViewport() {
 	case TabInfra:
 		content = renderInfraContent(m.infra, m.width, contentHeight)
 	case TabSystem:
-		content = renderSystemContent(m.fastfetch, m.width, contentHeight)
+		content = renderSystemContent(m.fastfetch, m.sysmetrics, m.width, contentHeight)
 	}
 
 	m.viewport.SetContent(styleContent.Width(m.width).Render(content))

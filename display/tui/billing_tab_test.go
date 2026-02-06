@@ -309,3 +309,100 @@ func TestRenderBillingContent_UnderBudget(t *testing.T) {
 		t.Error("expected remaining amount '$150.00 remaining'")
 	}
 }
+
+func TestRenderBillingContent_WithPreviousMonth(t *testing.T) {
+	prev := 100.0
+	data := &collectors.BillingData{
+		Providers: []collectors.ProviderBilling{
+			{
+				Provider:      "civo",
+				Status:        "ok",
+				PreviousMonth: &prev,
+				CurrentMonth: collectors.MonthCost{
+					SpendUSD:  125.00,
+					StartDate: "2026-02-01",
+					EndDate:   "2026-02-28",
+				},
+				FetchedAt: time.Now(),
+			},
+		},
+		Total: collectors.BillingSummary{
+			CurrentMonthUSD: 125.00,
+		},
+	}
+
+	result := renderBillingContent(data, 120, 24)
+
+	// Should contain month-over-month comparison (25% increase).
+	if !strings.Contains(result, "vs last mo") {
+		t.Error("expected month-over-month comparison text")
+	}
+	// Up arrow for increase.
+	if !strings.Contains(result, "\u2191") {
+		t.Error("expected up arrow for cost increase")
+	}
+	if !strings.Contains(result, "25%") {
+		t.Error("expected '25%' change indicator")
+	}
+}
+
+func TestRenderBillingContent_WithPreviousMonthDecrease(t *testing.T) {
+	prev := 100.0
+	data := &collectors.BillingData{
+		Providers: []collectors.ProviderBilling{
+			{
+				Provider:      "digitalocean",
+				Status:        "ok",
+				PreviousMonth: &prev,
+				CurrentMonth: collectors.MonthCost{
+					SpendUSD:  80.00,
+					StartDate: "2026-02-01",
+					EndDate:   "2026-02-28",
+				},
+				FetchedAt: time.Now(),
+			},
+		},
+		Total: collectors.BillingSummary{
+			CurrentMonthUSD: 80.00,
+		},
+	}
+
+	result := renderBillingContent(data, 120, 24)
+
+	// Should contain month-over-month comparison (20% decrease).
+	if !strings.Contains(result, "vs last mo") {
+		t.Error("expected month-over-month comparison text")
+	}
+	// Down arrow for decrease.
+	if !strings.Contains(result, "\u2193") {
+		t.Error("expected down arrow for cost decrease")
+	}
+}
+
+func TestRenderBillingContent_NoPreviousMonthNoComparison(t *testing.T) {
+	data := &collectors.BillingData{
+		Providers: []collectors.ProviderBilling{
+			{
+				Provider:      "aws",
+				Status:        "ok",
+				PreviousMonth: nil,
+				CurrentMonth: collectors.MonthCost{
+					SpendUSD:  50.00,
+					StartDate: "2026-02-01",
+					EndDate:   "2026-02-28",
+				},
+				FetchedAt: time.Now(),
+			},
+		},
+		Total: collectors.BillingSummary{
+			CurrentMonthUSD: 50.00,
+		},
+	}
+
+	result := renderBillingContent(data, 120, 24)
+
+	// Should NOT contain month-over-month comparison.
+	if strings.Contains(result, "vs last mo") {
+		t.Error("expected no month-over-month comparison for nil previous month")
+	}
+}

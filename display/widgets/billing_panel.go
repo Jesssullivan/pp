@@ -3,6 +3,7 @@ package widgets
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -44,6 +45,8 @@ type ProviderSpend struct {
 	Forecast *float64
 	// Budget is the monthly budget limit in USD.
 	Budget *float64
+	// PreviousMonth is last month's total spend in USD, if available.
+	PreviousMonth *float64
 	// History contains up to 30 days of daily spend for sparkline rendering.
 	// Most recent day is last.
 	History []float64
@@ -227,7 +230,55 @@ func renderProviderRow(
 		lines = append(lines, forecastLine)
 	}
 
+	// Month-over-month comparison.
+	if mom := FormatMonthOverMonth(p.Current, p.PreviousMonth, cfg.ColorEnabled); mom != "" {
+		momLine := "    " + mom
+		lines = append(lines, momLine)
+	}
+
 	return lines
+}
+
+// FormatMonthOverMonth computes the month-over-month delta between current
+// and previous spend and returns a formatted string with arrow and percentage.
+// Returns empty string if previousMonth is nil or zero.
+// Uses unicode arrows: up for increase, down for decrease, right for unchanged (<1% change).
+// The colorEnabled flag controls whether ANSI colors are applied:
+// red for increase (costs going up), green for decrease (costs going down).
+func FormatMonthOverMonth(current float64, previousMonth *float64, colorEnabled bool) string {
+	if previousMonth == nil || *previousMonth == 0 {
+		return ""
+	}
+
+	prev := *previousMonth
+	delta := current - prev
+	pctChange := (delta / prev) * 100
+
+	colorIncrease := lipgloss.Color("#EF4444") // red - costs going up is bad
+	colorDecrease := lipgloss.Color("#22C55E") // green - costs going down is good
+	colorFlat := lipgloss.Color("#6B7280")     // gray - unchanged
+
+	var arrow string
+	var color lipgloss.Color
+
+	absPct := math.Abs(pctChange)
+	if absPct < 1.0 {
+		arrow = "\u2192" // right arrow for flat
+		color = colorFlat
+	} else if delta > 0 {
+		arrow = "\u2191" // up arrow for increase
+		color = colorIncrease
+	} else {
+		arrow = "\u2193" // down arrow for decrease
+		color = colorDecrease
+	}
+
+	text := fmt.Sprintf("%s%.0f%% vs last mo", arrow, absPct)
+
+	if colorEnabled {
+		return lipgloss.NewStyle().Foreground(color).Render(text)
+	}
+	return text
 }
 
 // RenderCompactBillingPanel renders a compact single-line billing summary
