@@ -4,7 +4,7 @@ package main
 //
 //	go build -ldflags "-X main.version=2.0.1 -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
-	version = "2.0.1"
+	version = "2.0.2"
 	commit  = "dev"
 	date    = "unknown"
 )
