@@ -1,0 +1,51 @@
+# prompt-pulse v2 configuration (nested TOML)
+[general]
+daemon_poll_interval = "15m"
+data_retention = "10m"
+log_level = "info"
+cache_dir = "/home/user/.cache/prompt-pulse"
+
+[layout]
+preset = "dashboard"
+
+[collectors.sysmetrics]
+enabled = true
+interval = "1s"
+
+[collectors.tailscale]
+enabled = true
+interval = "30s"
+
+[collectors.kubernetes]
+enabled = false
+interval = "60s"
+
+[collectors.claude]
+enabled = true
+interval = "5m"
+
+[collectors.billing]
+enabled = false
+interval = "15m"
+
+[image]
+protocol = "auto"
+max_cache_size_mb = 50
+max_sessions = 10
+waifu_enabled = true
+waifu_category = "waifu"
+
+[theme]
+name = "default"
+
+[shell]
+tui_keybinding = "\\C-p"
+show_banner_on_startup = true
+banner_timeout = "2s"
+instant_banner = true
+
+[banner]
+compact_max_width = 80
+standard_min_width = 120
+wide_min_width = 160
+ultrawide_min_width = 200

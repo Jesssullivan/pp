@@ -1,0 +1,16 @@
+# prompt-pulse v1 configuration (full)
+waifu_path = "/home/user/.config/prompt-pulse/waifu.png"
+waifu_enabled = true
+daemon_socket = "/tmp/prompt-pulse.sock"
+daemon_pid_file = "/tmp/prompt-pulse.pid"
+cache_dir = "/home/user/.cache/prompt-pulse"
+cache_ttl = "10m"
+banner_width = 140
+banner_show_waifu = true
+tailscale_enabled = true
+k8s_enabled = true
+claude_enabled = true
+billing_enabled = false
+starship_enabled = true
+starship_format = "$directory$git_branch$character"
+theme = "gruvbox"

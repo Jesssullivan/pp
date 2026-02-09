@@ -1,0 +1,8 @@
+# Minimal config -- only overrides a few fields.
+# Everything else uses defaults.
+
+[general]
+log_level = "warn"
+
+[theme]
+name = "gruvbox"

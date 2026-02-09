@@ -1,0 +1,5 @@
+module example.com/noversion
+
+require (
+	github.com/something v1.0.0
+)

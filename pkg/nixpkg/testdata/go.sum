@@ -1,0 +1,8 @@
+github.com/charmbracelet/bubbletea v1.3.10 h1:abc123=
+github.com/charmbracelet/bubbletea v1.3.10/go.mod h1:def456=
+github.com/shirou/gopsutil/v4 v4.26.1 h1:ghi789=
+github.com/shirou/gopsutil/v4 v4.26.1/go.mod h1:jkl012=
+golang.org/x/sys v0.40.0 h1:mno345=
+golang.org/x/sys v0.40.0/go.mod h1:pqr678=
+github.com/mattn/go-isatty v0.0.20 h1:stu901=
+github.com/mattn/go-isatty v0.0.20/go.mod h1:vwx234=

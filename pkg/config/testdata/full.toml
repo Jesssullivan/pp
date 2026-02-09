@@ -1,0 +1,88 @@
+# prompt-pulse v2 configuration
+# Full example with all options specified.
+
+[general]
+daemon_poll_interval = "10m"
+data_retention = "30m"
+log_level = "debug"
+cache_dir = "/tmp/ppulse-cache"
+
+[layout]
+preset = "dashboard"
+
+# Custom layout rows override the preset when specified.
+# Each [[layout.row]] defines a horizontal row.
+# Each [[layout.row.child]] defines a widget in that row.
+#
+# [[layout.row]]
+# ratio = 3
+#   [[layout.row.child]]
+#   type = "waifu"
+#   ratio = 2
+#   [[layout.row.child]]
+#   type = "claude"
+#   ratio = 3
+
+[collectors.sysmetrics]
+enabled = true
+interval = "2s"
+
+[collectors.tailscale]
+enabled = true
+interval = "45s"
+
+[collectors.kubernetes]
+enabled = true
+interval = "90s"
+contexts = ["tinyland", "civo-prod"]
+namespaces = ["default", "monitoring"]
+
+[collectors.claude]
+enabled = true
+interval = "10m"
+# Prefer ANTHROPIC_ADMIN_KEY env var over storing key in config.
+# admin_key = "sk-ant-admin01-..."
+
+[[collectors.claude.account]]
+name = "personal"
+# admin_key = "sk-ant-admin01-..."
+
+[[collectors.claude.account]]
+name = "work"
+# admin_key = "sk-ant-admin01-..."
+
+[collectors.billing]
+enabled = true
+interval = "20m"
+
+[collectors.billing.civo]
+enabled = true
+# Prefer CIVO_TOKEN env var over storing key in config.
+# api_key = "..."
+
+[collectors.billing.digitalocean]
+enabled = true
+# Prefer DIGITALOCEAN_TOKEN env var over storing key in config.
+# api_key = "..."
+
+[image]
+protocol = "kitty"
+max_cache_size_mb = 100
+max_sessions = 20
+waifu_enabled = true
+waifu_category = "neko"
+
+[theme]
+name = "catppuccin"
+
+[shell]
+tui_keybinding = "\\C-p"
+show_banner_on_startup = true
+banner_timeout = "3s"
+instant_banner = true
+
+[banner]
+compact_max_width = 90
+standard_min_width = 130
+wide_min_width = 170
+ultrawide_min_width = 220

@@ -1,0 +1,4 @@
+# prompt-pulse v1 configuration (partial - only some fields set)
+waifu_enabled = false
+tailscale_enabled = true
+theme = "nord"
